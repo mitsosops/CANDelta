@@ -1,0 +1,122 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:CANDelta.App.ViewModels"
+        x:Class="CANDelta.App.Views.MainWindow"
+        x:DataType="vm:MainWindowViewModel"
+        Title="{Binding Title}"
+        Width="1200" Height="800"
+        WindowStartupLocation="CenterScreen">
+
+    <Grid RowDefinitions="Auto,*,Auto">
+        <!-- Toolbar -->
+        <Border Grid.Row="0" Background="{DynamicResource SystemControlBackgroundChromeMediumBrush}" Padding="8">
+            <StackPanel Orientation="Horizontal" Spacing="8">
+                <!-- Connection -->
+                <ComboBox ItemsSource="{Binding AvailablePorts}"
+                          SelectedItem="{Binding SelectedPort}"
+                          Width="120"
+                          IsEnabled="{Binding !IsConnected}"/>
+                <Button Command="{Binding RefreshPortsCommand}"
+                        Content="↻"
+                        ToolTip.Tip="Refresh Ports"
+                        IsEnabled="{Binding !IsConnected}"/>
+                <Button Command="{Binding ConnectCommand}">
+                    <TextBlock Text="{Binding IsConnected, Converter={x:Static vm:MainWindowViewModel.ConnectButtonConverter}}"/>
+                </Button>
+
+                <Separator/>
+
+                <!-- Speed -->
+                <TextBlock Text="Speed:" VerticalAlignment="Center"/>
+                <ComboBox ItemsSource="{Binding AvailableSpeeds}"
+                          SelectedItem="{Binding SelectedSpeed}"
+                          Width="120"
+                          IsEnabled="{Binding !IsCapturing}"/>
+
+                <Separator/>
+
+                <!-- Capture -->
+                <Button Command="{Binding ToggleCaptureCommand}"
+                        IsEnabled="{Binding IsConnected}">
+                    <StackPanel Orientation="Horizontal" Spacing="4">
+                        <Ellipse Width="10" Height="10"
+                                 Fill="{Binding IsCapturing, Converter={x:Static vm:MainWindowViewModel.CaptureLedConverter}}"/>
+                        <TextBlock Text="{Binding IsCapturing, Converter={x:Static vm:MainWindowViewModel.CaptureButtonConverter}}"/>
+                    </StackPanel>
+                </Button>
+
+                <Separator/>
+
+                <!-- Save -->
+                <Button Command="{Binding SaveTraceToControlCommand}"
+                        Content="Save to Control"
+                        IsEnabled="{Binding !IsCapturing}"/>
+                <Button Command="{Binding SaveTraceToTestCommand}"
+                        Content="Save to Test"
+                        IsEnabled="{Binding !IsCapturing}"/>
+
+                <Separator/>
+
+                <!-- Analyze -->
+                <Button Command="{Binding AnalyzeDeltaCommand}"
+                        Content="Analyze Delta"
+                        Classes="accent"/>
+                <Button Command="{Binding ClearAllCommand}"
+                        Content="Clear All"/>
+            </StackPanel>
+        </Border>
+
+        <!-- Main Content -->
+        <Grid Grid.Row="1" ColumnDefinitions="*,Auto,*">
+            <!-- Live Frames -->
+            <DockPanel Grid.Column="0" Margin="8">
+                <TextBlock DockPanel.Dock="Top" Text="Live CAN Frames" FontWeight="Bold" Margin="0,0,0,8"/>
+                <TextBlock DockPanel.Dock="Top" Text="{Binding FrameCount, StringFormat='Frames: {0}'}" Margin="0,0,0,8"/>
+                <DataGrid ItemsSource="{Binding LiveFrames}"
+                          AutoGenerateColumns="False"
+                          IsReadOnly="True"
+                          GridLinesVisibility="Horizontal"
+                          CanUserResizeColumns="True">
+                    <DataGrid.Columns>
+                        <DataGridTextColumn Header="Time (µs)" Binding="{Binding TimestampUs}" Width="100"/>
+                        <DataGridTextColumn Header="ID" Binding="{Binding Id, StringFormat=X3}" Width="80"/>
+                        <DataGridTextColumn Header="DLC" Binding="{Binding Dlc}" Width="40"/>
+                        <DataGridTextColumn Header="Data" Binding="{Binding Data, Converter={x:Static vm:MainWindowViewModel.HexConverter}}" Width="*"/>
+                    </DataGrid.Columns>
+                </DataGrid>
+            </DockPanel>
+
+            <!-- Splitter -->
+            <GridSplitter Grid.Column="1" Width="4" ResizeDirection="Columns"/>
+
+            <!-- Delta Results -->
+            <DockPanel Grid.Column="2" Margin="8">
+                <StackPanel DockPanel.Dock="Top" Spacing="4" Margin="0,0,0,8">
+                    <TextBlock Text="Delta Results" FontWeight="Bold"/>
+                    <TextBlock Text="{Binding ControlBehaviour.Traces.Count, StringFormat='Control: {0} traces', FallbackValue='Control: 0 traces'}"/>
+                    <TextBlock Text="{Binding TestBehaviour.Traces.Count, StringFormat='Test: {0} traces', FallbackValue='Test: 0 traces'}"/>
+                    <TextBlock Text="{Binding DeltaResult.Summary, FallbackValue='Run analysis to see results'}"
+                               FontStyle="Italic"/>
+                </StackPanel>
+                <DataGrid ItemsSource="{Binding DeltaFrames}"
+                          AutoGenerateColumns="False"
+                          IsReadOnly="True"
+                          GridLinesVisibility="Horizontal"
+                          CanUserResizeColumns="True">
+                    <DataGrid.Columns>
+                        <DataGridTextColumn Header="CAN ID" Binding="{Binding Id, StringFormat=X3}" Width="80"/>
+                        <DataGridTextColumn Header="Count" Binding="{Binding OccurrenceCount}" Width="60"/>
+                        <DataGridTextColumn Header="%" Binding="{Binding OccurrencePercentage, StringFormat=P0}" Width="60"/>
+                        <DataGridTextColumn Header="Confidence" Binding="{Binding Confidence, StringFormat=P0}" Width="80"/>
+                        <DataGridTextColumn Header="Patterns" Binding="{Binding DataPatterns.Count}" Width="*"/>
+                    </DataGrid.Columns>
+                </DataGrid>
+            </DockPanel>
+        </Grid>
+
+        <!-- Status Bar -->
+        <Border Grid.Row="2" Background="{DynamicResource SystemControlBackgroundChromeMediumBrush}" Padding="8,4">
+            <TextBlock Text="{Binding StatusMessage}"/>
+        </Border>
+    </Grid>
+</Window>
