@@ -131,17 +131,32 @@ bool mcp2515_set_mode(mcp2515_mode_t mode) {
         default: return false;
     }
 
+    // Clear any pending interrupt flags before mode change
+    spi_write_register(REG_CANINTF, 0x00);
+
+    // Request mode change
     spi_modify_register(REG_CANCTRL, MODE_MASK, mode_bits);
 
-    // Verify mode change
-    sleep_ms(1);
-    uint8_t status = spi_read_register(REG_CANSTAT);
-    return (status & MODE_MASK) == mode_bits;
+    // Wait for mode change with timeout (up to 50ms)
+    for (int i = 0; i < 50; i++) {
+        sleep_ms(1);
+        uint8_t status = spi_read_register(REG_CANSTAT);
+        if ((status & MODE_MASK) == mode_bits) {
+            return true;
+        }
+    }
+    return false;
 }
 
 bool mcp2515_set_speed(uint32_t speed_bps) {
-    // Enter config mode
-    if (!mcp2515_set_mode(MCP2515_MODE_CONFIG)) {
+    // Reset the MCP2515 to ensure clean state
+    mcp2515_reset();
+    sleep_ms(5);
+
+    // After reset, chip is in CONFIG mode by default
+    // Verify we're in CONFIG mode
+    uint8_t status = spi_read_register(REG_CANSTAT);
+    if ((status & MODE_MASK) != MODE_CONFIG) {
         return false;
     }
 
@@ -168,6 +183,13 @@ bool mcp2515_set_speed(uint32_t speed_bps) {
     spi_write_register(REG_CNF1, cnf1);
     spi_write_register(REG_CNF2, cnf2);
     spi_write_register(REG_CNF3, cnf3);
+
+    // Reconfigure RX buffers to accept all messages (reset clears these)
+    spi_write_register(REG_RXB0CTRL, 0x60);
+    spi_write_register(REG_RXB1CTRL, 0x60);
+
+    // Re-enable RX interrupts
+    spi_write_register(REG_CANINTE, 0x03);
 
     return true;
 }
