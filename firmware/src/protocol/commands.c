@@ -10,12 +10,13 @@ extern volatile bool g_capture_active;
 
 // Internal state
 static uint32_t g_can_speed = CAN_DEFAULT_SPEED;
-static uint32_t g_rx_count = 0;
 static uint32_t g_tx_count = 0;
 
-// Command buffer
+// Command buffer and parser state
 static uint8_t cmd_buffer[CMD_BUFFER_SIZE];
 static uint8_t cmd_len = 0;
+static uint8_t cmd_expected_len = 0;  // Expected payload length
+static enum { WAIT_STX, READ_OPCODE, READ_LEN, READ_PAYLOAD, WAIT_ETX } parse_state = WAIT_STX;
 
 static void send_response(response_code_t code, const uint8_t *data, uint8_t len) {
     uint8_t packet[64];
@@ -43,7 +44,7 @@ static void send_nak(uint8_t error_code) {
 }
 
 static void handle_command(uint8_t opcode, const uint8_t *params, uint8_t param_len) {
-    // Flash green on RX command
+    // Flash green on USB command RX
     led_flash(LED_GREEN, 50);
 
     switch (opcode) {
@@ -54,6 +55,27 @@ static void handle_command(uint8_t opcode, const uint8_t *params, uint8_t param_
         case CMD_GET_VERSION: {
             static const uint8_t version[] = {PROTOCOL_VERSION, 0, 1, 0};  // v0.1.0
             send_response(RSP_VERSION, version, 4);
+            break;
+        }
+
+        case CMD_DEBUG: {
+            // Return buffer debug info + MCP2515 registers
+            uint8_t buf[12];
+            uint16_t head = usb_get_buffer_head();
+            uint16_t tail = usb_get_buffer_tail();
+            buf[0] = head & 0xFF;
+            buf[1] = (head >> 8) & 0xFF;
+            buf[2] = tail & 0xFF;
+            buf[3] = (tail >> 8) & 0xFF;
+            buf[4] = usb_get_rx_count() & 0xFF;
+            buf[5] = usb_get_tx_to_host_count() & 0xFF;
+            buf[6] = g_capture_active ? 1 : 0;
+            buf[7] = mcp2515_get_canintf();   // Interrupt flags
+            buf[8] = mcp2515_get_canstat();   // Status/mode
+            buf[9] = mcp2515_get_error_flags();
+            buf[10] = mcp2515_get_cnf1();  // Should be 0x01 for 500kbps
+            buf[11] = 0;
+            send_response(RSP_DEBUG, buf, 12);
             break;
         }
 
@@ -173,6 +195,8 @@ static void handle_command(uint8_t opcode, const uint8_t *params, uint8_t param_
 
 void commands_init(void) {
     cmd_len = 0;
+    cmd_expected_len = 0;
+    parse_state = WAIT_STX;
 }
 
 void commands_process(void) {
@@ -182,25 +206,50 @@ void commands_process(void) {
     for (int i = 0; i < rx_len; i++) {
         uint8_t byte = rx_buf[i];
 
-        if (byte == 0x02) {
-            // Start of packet
-            cmd_len = 0;
-        } else if (byte == 0x03) {
-            // End of packet - process command
-            if (cmd_len >= 2) {
-                uint8_t opcode = cmd_buffer[0];
-                uint8_t param_len = cmd_buffer[1];
+        switch (parse_state) {
+            case WAIT_STX:
+                if (byte == 0x02) {
+                    cmd_len = 0;
+                    parse_state = READ_OPCODE;
+                }
+                break;
 
-                if (param_len + 2 <= cmd_len) {
+            case READ_OPCODE:
+                cmd_buffer[cmd_len++] = byte;
+                parse_state = READ_LEN;
+                break;
+
+            case READ_LEN:
+                cmd_buffer[cmd_len++] = byte;
+                cmd_expected_len = byte;
+                if (cmd_expected_len == 0) {
+                    parse_state = WAIT_ETX;
+                } else {
+                    parse_state = READ_PAYLOAD;
+                }
+                break;
+
+            case READ_PAYLOAD:
+                if (cmd_len < CMD_BUFFER_SIZE) {
+                    cmd_buffer[cmd_len++] = byte;
+                }
+                // Check if we've read all expected payload bytes
+                if (cmd_len >= cmd_expected_len + 2) {
+                    parse_state = WAIT_ETX;
+                }
+                break;
+
+            case WAIT_ETX:
+                if (byte == 0x03) {
+                    // Valid packet - process command
+                    uint8_t opcode = cmd_buffer[0];
+                    uint8_t param_len = cmd_buffer[1];
                     handle_command(opcode, &cmd_buffer[2], param_len);
                 }
-            }
-            cmd_len = 0;
-        } else {
-            // Add to buffer
-            if (cmd_len < CMD_BUFFER_SIZE) {
-                cmd_buffer[cmd_len++] = byte;
-            }
+                // Reset for next packet (even if ETX was wrong)
+                parse_state = WAIT_STX;
+                cmd_len = 0;
+                break;
         }
     }
 }
@@ -211,6 +260,6 @@ void commands_get_status(device_status_t *status) {
     status->can_speed = g_can_speed;
     status->capture_active = g_capture_active;
     status->error_flags = mcp2515_get_error_flags();
-    status->rx_frame_count = g_rx_count;
-    status->tx_frame_count = g_tx_count;
+    status->rx_frame_count = usb_get_rx_count();        // Frames queued (Core 1)
+    status->tx_frame_count = usb_get_tx_to_host_count(); // Frames sent to host (Core 0)
 }

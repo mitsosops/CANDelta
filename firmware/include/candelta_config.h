@@ -11,11 +11,11 @@
 
 // MCP2515 SPI Configuration (Adafruit Feather RP2040 CAN)
 #define MCP2515_SPI_PORT    spi1
-#define MCP2515_PIN_MISO    12
+#define MCP2515_PIN_MISO    8
 #define MCP2515_PIN_MOSI    15
 #define MCP2515_PIN_SCK     14
-#define MCP2515_PIN_CS      9
-#define MCP2515_PIN_INT     11
+#define MCP2515_PIN_CS      19
+#define MCP2515_PIN_INT     22
 
 #define MCP2515_SPI_SPEED   (10 * 1000 * 1000)  // 10 MHz
 

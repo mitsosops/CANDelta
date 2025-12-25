@@ -26,4 +26,14 @@ void usb_write(const uint8_t *data, int len);
 // Check if USB is connected
 bool usb_is_connected(void);
 
+// Get RX frame count (queued by Core 1)
+uint32_t usb_get_rx_count(void);
+
+// Get TX to host count (sent by Core 0)
+uint32_t usb_get_tx_to_host_count(void);
+
+// Debug: buffer state
+uint16_t usb_get_buffer_head(void);
+uint16_t usb_get_buffer_tail(void);
+
 #endif // USB_COMM_H

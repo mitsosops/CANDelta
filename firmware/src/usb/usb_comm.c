@@ -1,5 +1,6 @@
 #include "usb_comm.h"
 #include "candelta_config.h"
+#include "led/led.h"
 #include "pico/stdlib.h"
 #include "pico/mutex.h"
 #include <stdio.h>
@@ -10,6 +11,10 @@ static can_frame_t frame_buffer[CAN_RX_BUFFER_SIZE];
 static volatile uint16_t buffer_head = 0;
 static volatile uint16_t buffer_tail = 0;
 static mutex_t buffer_mutex;
+
+// Frame counters
+static volatile uint32_t rx_frame_count = 0;
+static volatile uint32_t tx_to_host_count = 0;
 
 void usb_comm_init(void) {
     mutex_init(&buffer_mutex);
@@ -28,9 +33,14 @@ bool usb_queue_frame(const can_frame_t *frame) {
 
     memcpy((void*)&frame_buffer[buffer_head], frame, sizeof(can_frame_t));
     buffer_head = next_head;
+    rx_frame_count++;
 
     mutex_exit(&buffer_mutex);
     return true;
+}
+
+uint32_t usb_get_rx_count(void) {
+    return rx_frame_count;
 }
 
 void usb_transmit_queued(void) {
@@ -48,11 +58,16 @@ void usb_transmit_queued(void) {
         mutex_exit(&buffer_mutex);
 
         // Serialize frame to wire format
-        // Format: [0x02][timestamp:8][id:4][flags:1][dlc:1][data:0-8][0x03]
-        uint8_t packet[24];
+        // Format: [STX][opcode][len][timestamp:8][id:4][flags:1][dlc:1][data:0-8][ETX]
+        uint8_t packet[32];
         int idx = 0;
 
         packet[idx++] = 0x02;  // STX
+        packet[idx++] = 0x84;  // RSP_CAN_FRAME opcode
+
+        // Calculate payload length: 8 + 4 + 1 + 1 + dlc = 14 + dlc
+        uint8_t payload_len = 14 + frame.dlc;
+        packet[idx++] = payload_len;
 
         // Timestamp (8 bytes, little-endian)
         for (int i = 0; i < 8; i++) {
@@ -78,7 +93,23 @@ void usb_transmit_queued(void) {
         packet[idx++] = 0x03;  // ETX
 
         usb_write(packet, idx);
+        tx_to_host_count++;
+
+        // Flash blue for each CAN frame sent to host
+        led_flash(LED_BLUE, 20);
     }
+}
+
+uint32_t usb_get_tx_to_host_count(void) {
+    return tx_to_host_count;
+}
+
+uint16_t usb_get_buffer_head(void) {
+    return buffer_head;
+}
+
+uint16_t usb_get_buffer_tail(void) {
+    return buffer_tail;
 }
 
 int usb_read(uint8_t *buffer, int max_len) {

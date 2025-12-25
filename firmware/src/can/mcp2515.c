@@ -48,18 +48,12 @@ static void spi_cs_deselect(void) {
 }
 
 static uint8_t spi_read_register(uint8_t reg) {
-    uint8_t tx[2] = {MCP_READ, reg};
-    uint8_t rx[2];
-
-    spi_cs_select();
-    spi_write_read_blocking(MCP2515_SPI_PORT, tx, rx, 2);
-    spi_cs_deselect();
-
-    // Read actual value
-    spi_cs_select();
-    spi_write_blocking(MCP2515_SPI_PORT, tx, 2);
+    uint8_t cmd[2] = {MCP_READ, reg};
     uint8_t val;
-    spi_read_blocking(MCP2515_SPI_PORT, 0, &val, 1);
+
+    spi_cs_select();
+    spi_write_blocking(MCP2515_SPI_PORT, cmd, 2);
+    spi_read_blocking(MCP2515_SPI_PORT, 0x00, &val, 1);
     spi_cs_deselect();
 
     return val;
@@ -151,22 +145,21 @@ bool mcp2515_set_speed(uint32_t speed_bps) {
         return false;
     }
 
-    // CNF values for 16MHz crystal
-    // These are pre-calculated for common baud rates
+    // CNF values for 16MHz crystal (from arduino-mcp2515 library)
     uint8_t cnf1, cnf2, cnf3;
 
     switch (speed_bps) {
         case CAN_SPEED_125KBPS:
-            cnf1 = 0x07; cnf2 = 0xB6; cnf3 = 0x04;
+            cnf1 = 0x03; cnf2 = 0xF0; cnf3 = 0x86;
             break;
         case CAN_SPEED_250KBPS:
-            cnf1 = 0x03; cnf2 = 0xB6; cnf3 = 0x04;
+            cnf1 = 0x41; cnf2 = 0xF1; cnf3 = 0x85;
             break;
         case CAN_SPEED_500KBPS:
-            cnf1 = 0x01; cnf2 = 0xB6; cnf3 = 0x04;
+            cnf1 = 0x00; cnf2 = 0xF0; cnf3 = 0x86;
             break;
         case CAN_SPEED_1MBPS:
-            cnf1 = 0x00; cnf2 = 0xB6; cnf3 = 0x04;
+            cnf1 = 0x00; cnf2 = 0xD0; cnf3 = 0x82;
             break;
         default:
             return false;
@@ -224,8 +217,39 @@ bool mcp2515_receive(can_frame_t *frame) {
     }
 
     if (status & 0x02) {
-        // RX buffer 1 - similar logic
+        // RX buffer 1 has data
+        uint8_t cmd = MCP_READ_RX1;
+        uint8_t buf[13];
+
+        spi_cs_select();
+        spi_write_blocking(MCP2515_SPI_PORT, &cmd, 1);
+        spi_read_blocking(MCP2515_SPI_PORT, 0, buf, 13);
+        spi_cs_deselect();
+
+        // Parse ID
+        frame->extended = (buf[1] & 0x08) != 0;
+        if (frame->extended) {
+            frame->id = ((uint32_t)(buf[0]) << 21) |
+                       ((uint32_t)(buf[1] & 0xE0) << 13) |
+                       ((uint32_t)(buf[1] & 0x03) << 16) |
+                       ((uint32_t)buf[2] << 8) |
+                       buf[3];
+        } else {
+            frame->id = ((uint16_t)buf[0] << 3) | (buf[1] >> 5);
+        }
+
+        frame->rtr = (buf[4] & 0x40) != 0;
+        frame->dlc = buf[4] & 0x0F;
+        if (frame->dlc > 8) frame->dlc = 8;
+
+        for (int i = 0; i < frame->dlc; i++) {
+            frame->data[i] = buf[5 + i];
+        }
+
+        // Clear interrupt flag
         spi_modify_register(REG_CANINTF, 0x02, 0x00);
+
+        return true;
     }
 
     return false;
@@ -291,6 +315,18 @@ void mcp2515_clear_filters(void) {
 
 uint8_t mcp2515_get_error_flags(void) {
     return spi_read_register(REG_EFLG);
+}
+
+uint8_t mcp2515_get_canintf(void) {
+    return spi_read_register(REG_CANINTF);
+}
+
+uint8_t mcp2515_get_canstat(void) {
+    return spi_read_register(REG_CANSTAT);
+}
+
+uint8_t mcp2515_get_cnf1(void) {
+    return spi_read_register(REG_CNF1);
 }
 
 bool mcp2515_is_ready(void) {

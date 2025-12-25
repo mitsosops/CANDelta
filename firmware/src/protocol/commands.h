@@ -10,6 +10,7 @@ typedef enum {
     CMD_PING            = 0x01,
     CMD_GET_VERSION     = 0x04,
     CMD_GET_STATUS      = 0x05,
+    CMD_DEBUG           = 0x06,
     CMD_START_CAPTURE   = 0x10,
     CMD_STOP_CAPTURE    = 0x11,
     CMD_SET_SPEED       = 0x20,
@@ -26,6 +27,7 @@ typedef enum {
     RSP_VERSION         = 0x82,
     RSP_STATUS          = 0x83,
     RSP_CAN_FRAME       = 0x84,  // Async CAN frame data
+    RSP_DEBUG           = 0x85,
 } response_code_t;
 
 // Device status

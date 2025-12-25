@@ -55,4 +55,9 @@ uint8_t mcp2515_get_error_flags(void);
 // Check if MCP2515 is ready
 bool mcp2515_is_ready(void);
 
+// Debug registers
+uint8_t mcp2515_get_canintf(void);
+uint8_t mcp2515_get_canstat(void);
+uint8_t mcp2515_get_cnf1(void);
+
 #endif // MCP2515_H
