@@ -147,8 +147,9 @@ void mcp2515_init(void) {
     // Enable RX interrupts
     spi_write_register(REG_CANINTE, 0x03);
 
-    // Switch to normal mode
-    mcp2515_set_mode(MCP2515_MODE_NORMAL);
+    // Default to LISTEN-ONLY mode for passive monitoring
+    // Use mcp2515_set_mode(NORMAL) before TX or when CANDelta is only receiver
+    mcp2515_set_mode(MCP2515_MODE_LISTEN_ONLY);
 }
 
 void mcp2515_reset(void) {
@@ -188,11 +189,11 @@ bool mcp2515_set_mode(mcp2515_mode_t mode) {
     return false;
 }
 
-// Forward declarations for internal helpers
-static void reapply_filters_internal(void);
-
 bool mcp2515_set_timing(const mcp2515_timing_t *timing) {
     mutex_enter_blocking(&spi_mutex);
+
+    // Save current mode to restore after timing change
+    uint8_t prev_mode = spi_read_register(REG_CANSTAT) & MODE_MASK;
 
     // Try to enter CONFIG mode without reset
     spi_modify_register(REG_CANCTRL, MODE_MASK, MODE_CONFIG);
@@ -224,20 +225,17 @@ bool mcp2515_set_timing(const mcp2515_timing_t *timing) {
     // Clear interrupt flags
     spi_write_register(REG_CANINTF, 0x00);
 
-    // Ensure RX interrupts are enabled
-    spi_write_register(REG_CANINTE, 0x03);
+    // Note: RXBxCTRL, filters, masks, and CANINTE all preserve their values
+    // when entering CONFIG mode - only RESET clears them
 
-    // Restore RX buffer config (respects filter settings)
-    reapply_filters_internal();
-
-    // Return to NORMAL mode (within mutex to prevent race with Core 1)
-    spi_modify_register(REG_CANCTRL, MODE_MASK, MODE_NORMAL);
+    // Restore previous mode (within mutex to prevent race with Core 1)
+    spi_modify_register(REG_CANCTRL, MODE_MASK, prev_mode);
 
     // Wait for mode change
     for (int i = 0; i < 50; i++) {
         sleep_ms(1);
         uint8_t status = spi_read_register(REG_CANSTAT);
-        if ((status & MODE_MASK) == MODE_NORMAL) {
+        if ((status & MODE_MASK) == prev_mode) {
             break;
         }
     }
@@ -437,6 +435,15 @@ bool mcp2515_transmit(const can_frame_t *frame) {
     // Acquire SPI mutex for multi-core safety
     mutex_enter_blocking(&spi_mutex);
 
+    // TX only works in NORMAL mode - check current mode
+    uint8_t canstat = spi_read_register(REG_CANSTAT);
+    if ((canstat & MODE_MASK) != MODE_NORMAL) {
+        mutex_exit(&spi_mutex);
+        stats.tx_errors++;
+        if (tx_callback) tx_callback(false);
+        return false;  // Not in NORMAL mode - can't transmit
+    }
+
     // Check if TX buffer 0 is free
     uint8_t status = spi_read_register(REG_TXB0CTRL);
     if (status & 0x08) {
@@ -518,38 +525,6 @@ static void write_id_registers(uint8_t base_reg, uint32_t id, bool extended) {
     }
 }
 
-// Reapply stored filter/mask configuration after reset
-// Called from mcp2515_set_timing() while in CONFIG mode
-// Note: Does NOT acquire mutex (caller must hold it or be in init context)
-static void reapply_filters_internal(void) {
-    if (!filter_config.filters_enabled) {
-        // No filters enabled - set "accept all" mode
-        spi_write_register(REG_RXB0CTRL, 0x64);  // Accept all + rollover enabled
-        spi_write_register(REG_RXB1CTRL, 0x60);  // Accept all
-        return;
-    }
-
-    // Filters are enabled - restore masks first (must be set before filters)
-    for (int i = 0; i < 2; i++) {
-        if (filter_config.mask_set[i]) {
-            uint8_t reg = (i == 0) ? REG_RXM0 : REG_RXM1;
-            write_id_registers(reg, filter_config.masks[i], filter_config.mask_extended[i]);
-        }
-    }
-
-    // Restore filters
-    for (int i = 0; i < 6; i++) {
-        if (filter_config.filter_set[i]) {
-            uint8_t reg = get_filter_reg(i);
-            write_id_registers(reg, filter_config.filters[i].id, filter_config.filters[i].extended);
-        }
-    }
-
-    // Set filter mode on RX buffers
-    spi_write_register(REG_RXB0CTRL, 0x04);  // Filter mode + rollover
-    spi_write_register(REG_RXB1CTRL, 0x00);  // Filter mode
-}
-
 bool mcp2515_set_filter(uint8_t filter_num, const mcp2515_filter_t *filter) {
     if (filter_num > 5 || filter == NULL) {
         return false;
@@ -617,10 +592,15 @@ void mcp2515_enable_filters(void) {
 }
 
 void mcp2515_clear_filters(void) {
+    // Save current mode to restore after
+    uint8_t prev_mode = mcp2515_get_canstat() & 0xE0;
+
     mcp2515_set_mode(MCP2515_MODE_CONFIG);
     spi_write_register(REG_RXB0CTRL, 0x64);  // Accept all + rollover enabled
     spi_write_register(REG_RXB1CTRL, 0x60);  // Accept all
-    mcp2515_set_mode(MCP2515_MODE_NORMAL);
+
+    // Restore previous mode
+    mcp2515_set_mode((mcp2515_mode_t)(prev_mode >> 5));
 
     // Clear stored filter configuration
     for (int i = 0; i < 6; i++) {

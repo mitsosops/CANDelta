@@ -196,7 +196,7 @@ static void handle_command(uint8_t opcode, const uint8_t *params, uint8_t param_
 
                 if (mcp2515_set_speed(speed)) {
                     g_can_speed = speed;
-                    // Note: mcp2515_set_timing() already returns to NORMAL mode
+                    // mcp2515_set_timing() preserves the current mode
                     send_ack();
                 } else {
                     send_nak(0x01);  // Invalid speed
@@ -217,14 +217,18 @@ static void handle_command(uint8_t opcode, const uint8_t *params, uint8_t param_
                 filter.extended = (params[5] & 0x01) != 0;
                 filter.mask = 0xFFFFFFFF;  // Full match by default
 
-                // Enter config mode, set filter, enable filtering, return to normal
+                // Save current mode to restore after
+                uint8_t prev_canstat = mcp2515_get_canstat();
+                mcp2515_mode_t prev_mode = (mcp2515_mode_t)((prev_canstat >> 5) & 0x07);
+
+                // Enter config mode, set filter, enable filtering, restore mode
                 if (mcp2515_set_mode(MCP2515_MODE_CONFIG)) {
                     if (mcp2515_set_filter(filter_num, &filter)) {
                         mcp2515_enable_filters();
-                        mcp2515_set_mode(MCP2515_MODE_NORMAL);
+                        mcp2515_set_mode(prev_mode);
                         send_ack();
                     } else {
-                        mcp2515_set_mode(MCP2515_MODE_NORMAL);
+                        mcp2515_set_mode(prev_mode);
                         send_nak(0x06);  // Invalid filter
                     }
                 } else {
@@ -263,7 +267,7 @@ static void handle_command(uint8_t opcode, const uint8_t *params, uint8_t param_
                 g_capture_active = false;
 
                 if (mcp2515_set_timing(&timing)) {
-                    // Note: mcp2515_set_timing() already returns to NORMAL mode
+                    // mcp2515_set_timing() preserves the current mode
                     send_ack();
                 } else {
                     send_nak(0x05);  // Timing config failed
@@ -282,13 +286,17 @@ static void handle_command(uint8_t opcode, const uint8_t *params, uint8_t param_
                                (params[3] << 16) | (params[4] << 24);
                 bool extended = params[5] != 0;
 
-                // Enter config mode, set mask, return to normal
+                // Save current mode to restore after
+                uint8_t prev_canstat = mcp2515_get_canstat();
+                mcp2515_mode_t prev_mode = (mcp2515_mode_t)((prev_canstat >> 5) & 0x07);
+
+                // Enter config mode, set mask, restore mode
                 if (mcp2515_set_mode(MCP2515_MODE_CONFIG)) {
                     if (mcp2515_set_mask(mask_num, mask, extended)) {
-                        mcp2515_set_mode(MCP2515_MODE_NORMAL);
+                        mcp2515_set_mode(prev_mode);
                         send_ack();
                     } else {
-                        mcp2515_set_mode(MCP2515_MODE_NORMAL);
+                        mcp2515_set_mode(prev_mode);
                         send_nak(0x06);  // Invalid mask
                     }
                 } else {
