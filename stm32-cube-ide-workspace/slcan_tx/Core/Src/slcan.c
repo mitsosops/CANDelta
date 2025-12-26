@@ -6,9 +6,30 @@
 static CAN_HandleTypeDef *slcan_hcan;
 static uint8_t can_open = 0;
 
+// Error tracking (async - doesn't slow down TX)
+static volatile uint32_t tx_success_count = 0;
+static volatile uint32_t tx_error_count = 0;
+static volatile uint32_t last_can_error = 0;
+
 void SLCAN_Init(CAN_HandleTypeDef *hcan) {
   slcan_hcan = hcan;
   can_open = 0;
+  tx_success_count = 0;
+  tx_error_count = 0;
+  last_can_error = 0;
+}
+
+// Call this periodically from main loop to check for TX errors
+void SLCAN_CheckErrors(void) {
+  if (slcan_hcan == NULL) return;
+
+  uint32_t error = HAL_CAN_GetError(slcan_hcan);
+  if (error != HAL_CAN_ERROR_NONE) {
+    last_can_error = error;
+    tx_error_count++;
+    // Clear error flags
+    __HAL_CAN_CLEAR_FLAG(slcan_hcan, CAN_FLAG_ERRI);
+  }
 }
 
 uint8_t SLCAN_IsOpen(void) {
@@ -84,11 +105,13 @@ static void SLCAN_TransmitFrame(uint8_t *buf, uint8_t extended) {
 	  txData[i] = val;
   }
 
-  // Send frame
+  // Send frame (fire-and-forget, errors tracked async)
   if (HAL_CAN_AddTxMessage(slcan_hcan, &txHeader, txData, &txMailbox) == HAL_OK) {
-	  SLCAN_SendResponse("\r"); // OK
+	  tx_success_count++;  // Optimistic - actual errors tracked via SLCAN_CheckErrors()
+	  SLCAN_SendResponse("\r"); // OK - queued
   } else {
-	  SLCAN_SendResponse("\x07"); // Error
+	  tx_error_count++;
+	  SLCAN_SendResponse("\x07"); // Error - couldn't queue
   }
 }
 
@@ -124,8 +147,56 @@ void SLCAN_ProcessCommand(uint8_t *buf, uint16_t len) {
 		  SLCAN_SendResponse("\r");
 		  break;
 
-	  case 'F': // Read status flags
-		  SLCAN_SendResponse("F00\r");
+	  case 'F': // Read status flags (returns actual CAN error state)
+		  {
+			  // Check for current errors
+			  SLCAN_CheckErrors();
+
+			  // Build status: TEC in high nibble approximation, error flags in low
+			  uint32_t esr = slcan_hcan->Instance->ESR;
+			  uint8_t tec = (esr >> 16) & 0xFF;  // TEC is bits 23:16
+			  uint8_t rec = (esr >> 24) & 0xFF;  // REC is bits 31:24
+			  uint8_t status = 0;
+			  if (tec > 96 || rec > 96) status |= 0x01;  // Warning
+			  if (tec > 127 || rec > 127) status |= 0x02;  // Error passive
+			  if (esr & CAN_ESR_BOFF) status |= 0x04;  // Bus-off
+
+			  static char resp[16];
+			  snprintf(resp, sizeof(resp), "F%02X\r", status);
+			  SLCAN_SendResponse(resp);
+		  }
+		  break;
+
+	  case 'E': // Extended status (custom command): returns TEC,REC,tx_ok,tx_err
+		  {
+			  SLCAN_CheckErrors();
+			  uint32_t esr = slcan_hcan->Instance->ESR;
+			  uint8_t tec = (esr >> 16) & 0xFF;
+			  uint8_t rec = (esr >> 24) & 0xFF;
+			  static char resp[32];
+			  snprintf(resp, sizeof(resp), "E%02X%02X%04lX%04lX\r",
+					   tec, rec,
+					   tx_success_count & 0xFFFF,
+					   tx_error_count & 0xFFFF);
+			  SLCAN_SendResponse(resp);
+		  }
+		  break;
+
+	  case 'R': // Reset CAN controller (recover from bus-off)
+		  HAL_CAN_Stop(slcan_hcan);
+		  tx_success_count = 0;
+		  tx_error_count = 0;
+		  last_can_error = 0;
+		  if (can_open) {
+			  if (HAL_CAN_Start(slcan_hcan) == HAL_OK) {
+				  SLCAN_SendResponse("\r");
+			  } else {
+				  can_open = 0;
+				  SLCAN_SendResponse("\x07");
+			  }
+		  } else {
+			  SLCAN_SendResponse("\r");
+		  }
 		  break;
 
 	  case 't': // Transmit standard frame
