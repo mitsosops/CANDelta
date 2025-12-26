@@ -39,6 +39,10 @@ bool mcp2515_set_speed(uint32_t speed_bps);
 // Returns true if a frame was received
 bool mcp2515_receive(can_frame_t *frame);
 
+// Receive all available frames (for interrupt-driven capture)
+// Returns number of frames received (0-2)
+int mcp2515_receive_all(can_frame_t *frames, int max_frames);
+
 // Transmit a CAN frame
 // Returns true if frame was queued for transmission
 bool mcp2515_transmit(const can_frame_t *frame);

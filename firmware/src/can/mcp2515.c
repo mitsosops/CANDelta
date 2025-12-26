@@ -3,6 +3,10 @@
 #include "hardware/spi.h"
 #include "hardware/gpio.h"
 #include "pico/stdlib.h"
+#include "pico/mutex.h"
+
+// Mutex to protect SPI access between cores
+static mutex_t spi_mutex;
 
 // MCP2515 SPI Commands
 #define MCP_RESET       0xC0
@@ -76,6 +80,9 @@ static void spi_modify_register(uint8_t reg, uint8_t mask, uint8_t value) {
 }
 
 void mcp2515_init(void) {
+    // Initialize SPI mutex for multi-core safety
+    mutex_init(&spi_mutex);
+
     // Initialize SPI
     spi_init(MCP2515_SPI_PORT, MCP2515_SPI_SPEED);
 
@@ -101,8 +108,9 @@ void mcp2515_init(void) {
     mcp2515_set_speed(CAN_DEFAULT_SPEED);
 
     // Configure RX buffers to receive any message
-    spi_write_register(REG_RXB0CTRL, 0x60);  // Accept all messages
-    spi_write_register(REG_RXB1CTRL, 0x60);
+    // 0x64 = Accept all + BUKT (rollover to RXB1 when RXB0 full)
+    spi_write_register(REG_RXB0CTRL, 0x64);  // Accept all + rollover enabled
+    spi_write_register(REG_RXB1CTRL, 0x60);  // Accept all
 
     // Enable RX interrupts
     spi_write_register(REG_CANINTE, 0x03);
@@ -185,8 +193,8 @@ bool mcp2515_set_speed(uint32_t speed_bps) {
     spi_write_register(REG_CNF3, cnf3);
 
     // Reconfigure RX buffers to accept all messages (reset clears these)
-    spi_write_register(REG_RXB0CTRL, 0x60);
-    spi_write_register(REG_RXB1CTRL, 0x60);
+    spi_write_register(REG_RXB0CTRL, 0x64);  // Accept all + rollover enabled
+    spi_write_register(REG_RXB1CTRL, 0x60);  // Accept all
 
     // Re-enable RX interrupts
     spi_write_register(REG_CANINTE, 0x03);
@@ -277,10 +285,90 @@ bool mcp2515_receive(can_frame_t *frame) {
     return false;
 }
 
+// Helper to parse RX buffer data into frame
+static void parse_rx_buffer(const uint8_t *buf, can_frame_t *frame) {
+    frame->extended = (buf[1] & 0x08) != 0;
+    if (frame->extended) {
+        frame->id = ((uint32_t)(buf[0]) << 21) |
+                   ((uint32_t)(buf[1] & 0xE0) << 13) |
+                   ((uint32_t)(buf[1] & 0x03) << 16) |
+                   ((uint32_t)buf[2] << 8) |
+                   buf[3];
+    } else {
+        frame->id = ((uint16_t)buf[0] << 3) | (buf[1] >> 5);
+    }
+    frame->rtr = (buf[4] & 0x40) != 0;
+    frame->dlc = buf[4] & 0x0F;
+    if (frame->dlc > 8) frame->dlc = 8;
+    for (int i = 0; i < frame->dlc; i++) {
+        frame->data[i] = buf[5 + i];
+    }
+}
+
+int mcp2515_receive_all(can_frame_t *frames, int max_frames) {
+    int count = 0;
+
+    // Loop while INT is low (frames pending) and we have buffer space
+    // This prevents race condition where frames arrive while we're reading
+    while (count < max_frames && !gpio_get(MCP2515_PIN_INT)) {
+        // Acquire SPI mutex for multi-core safety
+        mutex_enter_blocking(&spi_mutex);
+
+        // Read CANINTF each iteration to catch newly arrived frames
+        uint8_t status = spi_read_register(REG_CANINTF);
+
+        if (status & 0x01) {
+            // RXB0 has data - READ_RX0 command auto-clears RX0IF
+            uint8_t cmd = MCP_READ_RX0;
+            uint8_t buf[13];
+
+            spi_cs_select();
+            spi_write_blocking(MCP2515_SPI_PORT, &cmd, 1);
+            spi_read_blocking(MCP2515_SPI_PORT, 0, buf, 13);
+            spi_cs_deselect();
+
+            parse_rx_buffer(buf, &frames[count]);
+            frames[count].timestamp_us = time_us_64();
+            count++;
+        }
+
+        if ((status & 0x02) && count < max_frames) {
+            // RXB1 has data - READ_RX1 command auto-clears RX1IF
+            uint8_t cmd = MCP_READ_RX1;
+            uint8_t buf[13];
+
+            spi_cs_select();
+            spi_write_blocking(MCP2515_SPI_PORT, &cmd, 1);
+            spi_read_blocking(MCP2515_SPI_PORT, 0, buf, 13);
+            spi_cs_deselect();
+
+            parse_rx_buffer(buf, &frames[count]);
+            frames[count].timestamp_us = time_us_64();
+            count++;
+        }
+
+        // Release SPI mutex
+        mutex_exit(&spi_mutex);
+
+        // If nothing was read but INT still low, something's wrong - break to avoid infinite loop
+        if ((status & 0x03) == 0) {
+            break;
+        }
+    }
+
+    // No manual flag clearing needed - READ_RX commands auto-clear
+
+    return count;
+}
+
 bool mcp2515_transmit(const can_frame_t *frame) {
+    // Acquire SPI mutex for multi-core safety
+    mutex_enter_blocking(&spi_mutex);
+
     // Check if TX buffer 0 is free
     uint8_t status = spi_read_register(REG_TXB0CTRL);
     if (status & 0x08) {
+        mutex_exit(&spi_mutex);
         return false;  // TX in progress
     }
 
@@ -317,6 +405,7 @@ bool mcp2515_transmit(const can_frame_t *frame) {
     spi_write_blocking(MCP2515_SPI_PORT, &cmd, 1);
     spi_cs_deselect();
 
+    mutex_exit(&spi_mutex);
     return true;
 }
 
@@ -330,28 +419,42 @@ void mcp2515_set_filter(uint8_t filter_num, uint32_t id, uint32_t mask, bool ext
 
 void mcp2515_clear_filters(void) {
     mcp2515_set_mode(MCP2515_MODE_CONFIG);
-    spi_write_register(REG_RXB0CTRL, 0x60);  // Accept all
-    spi_write_register(REG_RXB1CTRL, 0x60);
+    spi_write_register(REG_RXB0CTRL, 0x64);  // Accept all + rollover enabled
+    spi_write_register(REG_RXB1CTRL, 0x60);  // Accept all
     mcp2515_set_mode(MCP2515_MODE_NORMAL);
 }
 
 uint8_t mcp2515_get_error_flags(void) {
-    return spi_read_register(REG_EFLG);
+    mutex_enter_blocking(&spi_mutex);
+    uint8_t val = spi_read_register(REG_EFLG);
+    mutex_exit(&spi_mutex);
+    return val;
 }
 
 uint8_t mcp2515_get_canintf(void) {
-    return spi_read_register(REG_CANINTF);
+    mutex_enter_blocking(&spi_mutex);
+    uint8_t val = spi_read_register(REG_CANINTF);
+    mutex_exit(&spi_mutex);
+    return val;
 }
 
 uint8_t mcp2515_get_canstat(void) {
-    return spi_read_register(REG_CANSTAT);
+    mutex_enter_blocking(&spi_mutex);
+    uint8_t val = spi_read_register(REG_CANSTAT);
+    mutex_exit(&spi_mutex);
+    return val;
 }
 
 uint8_t mcp2515_get_cnf1(void) {
-    return spi_read_register(REG_CNF1);
+    mutex_enter_blocking(&spi_mutex);
+    uint8_t val = spi_read_register(REG_CNF1);
+    mutex_exit(&spi_mutex);
+    return val;
 }
 
 bool mcp2515_is_ready(void) {
+    mutex_enter_blocking(&spi_mutex);
     uint8_t status = spi_read_register(REG_CANSTAT);
+    mutex_exit(&spi_mutex);
     return (status & MODE_MASK) == MODE_NORMAL;
 }

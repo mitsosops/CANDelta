@@ -15,9 +15,17 @@ static mutex_t buffer_mutex;
 // Frame counters
 static volatile uint32_t rx_frame_count = 0;
 static volatile uint32_t tx_to_host_count = 0;
+static volatile uint32_t dropped_frame_count = 0;
+
+// Performance tracking
+static volatile uint32_t fps_counter = 0;          // Frames in current second
+static volatile uint32_t current_fps = 0;          // Last calculated FPS
+static volatile uint32_t peak_fps = 0;             // Maximum FPS observed
+static absolute_time_t last_fps_update;
 
 void usb_comm_init(void) {
     mutex_init(&buffer_mutex);
+    last_fps_update = get_absolute_time();
 }
 
 bool usb_queue_frame(const can_frame_t *frame) {
@@ -26,7 +34,8 @@ bool usb_queue_frame(const can_frame_t *frame) {
     uint16_t next_head = (buffer_head + 1) % CAN_RX_BUFFER_SIZE;
 
     if (next_head == buffer_tail) {
-        // Buffer full
+        // Buffer full - frame dropped
+        dropped_frame_count++;
         mutex_exit(&buffer_mutex);
         return false;
     }
@@ -34,6 +43,7 @@ bool usb_queue_frame(const can_frame_t *frame) {
     memcpy((void*)&frame_buffer[buffer_head], frame, sizeof(can_frame_t));
     buffer_head = next_head;
     rx_frame_count++;
+    fps_counter++;
 
     mutex_exit(&buffer_mutex);
     return true;
@@ -133,4 +143,47 @@ void usb_write(const uint8_t *data, int len) {
 
 bool usb_is_connected(void) {
     return stdio_usb_connected();
+}
+
+void usb_update_perf_stats(void) {
+    // Check if 1 second has passed
+    if (absolute_time_diff_us(last_fps_update, get_absolute_time()) >= 1000000) {
+        current_fps = fps_counter;
+        if (current_fps > peak_fps) {
+            peak_fps = current_fps;
+        }
+        fps_counter = 0;
+        last_fps_update = get_absolute_time();
+    }
+}
+
+void usb_get_perf_stats(perf_stats_t *stats) {
+    stats->frames_per_second = current_fps;
+    stats->peak_fps = peak_fps;
+    stats->dropped_frames = dropped_frame_count;
+
+    // Calculate buffer utilization (0-100%)
+    uint16_t head = buffer_head;
+    uint16_t tail = buffer_tail;
+    uint16_t used;
+    if (head >= tail) {
+        used = head - tail;
+    } else {
+        used = CAN_RX_BUFFER_SIZE - tail + head;
+    }
+    stats->buffer_utilization = (used * 100) / CAN_RX_BUFFER_SIZE;
+}
+
+void usb_reset_stats(void) {
+    mutex_enter_blocking(&buffer_mutex);
+    rx_frame_count = 0;
+    tx_to_host_count = 0;
+    dropped_frame_count = 0;
+    fps_counter = 0;
+    current_fps = 0;
+    peak_fps = 0;
+    buffer_head = 0;
+    buffer_tail = 0;
+    last_fps_update = get_absolute_time();
+    mutex_exit(&buffer_mutex);
 }

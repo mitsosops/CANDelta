@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include "pico/stdlib.h"
 #include "pico/multicore.h"
+#include "hardware/gpio.h"
 #include "candelta_config.h"
 #include "can/mcp2515.h"
 #include "usb/usb_comm.h"
@@ -10,19 +11,21 @@
 // Shared state between cores
 volatile bool g_capture_active = false;
 
-// Core 1: CAN frame capture (time-critical)
+// Core 1: CAN frame capture (tight polling with optimized receive)
 void core1_entry(void) {
+    // Larger buffer to handle bursts - mcp2515_receive_all() loops until INT goes high
+    can_frame_t frames[8];
+
     while (true) {
         if (g_capture_active) {
-            can_frame_t frame;
-            if (mcp2515_receive(&frame)) {
-                // Add timestamp and queue for transmission
-                frame.timestamp_us = time_us_64();
-                usb_queue_frame(&frame);
+            // Tight polling - check INT pin and read all available frames
+            if (!gpio_get(MCP2515_PIN_INT)) {
+                int count = mcp2515_receive_all(frames, 8);
+                for (int i = 0; i < count; i++) {
+                    usb_queue_frame(&frames[i]);
+                }
             }
-        }
-        // Small delay to prevent busy-waiting when not capturing
-        if (!g_capture_active) {
+        } else {
             sleep_us(100);
         }
     }
@@ -52,6 +55,9 @@ int main(void) {
 
         // Update LED state (handles flash timeout)
         led_update();
+
+        // Update performance stats (FPS calculation)
+        usb_update_perf_stats();
 
         // Yield to USB stack
         sleep_us(100);

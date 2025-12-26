@@ -79,6 +79,30 @@ static void handle_command(uint8_t opcode, const uint8_t *params, uint8_t param_
             break;
         }
 
+        case CMD_GET_PERF_STATS: {
+            perf_stats_t stats;
+            usb_get_perf_stats(&stats);
+
+            // Serialize: fps(4) + peak_fps(4) + dropped(4) + util(1) = 13 bytes
+            uint8_t buf[13];
+            buf[0] = (stats.frames_per_second >> 0) & 0xFF;
+            buf[1] = (stats.frames_per_second >> 8) & 0xFF;
+            buf[2] = (stats.frames_per_second >> 16) & 0xFF;
+            buf[3] = (stats.frames_per_second >> 24) & 0xFF;
+            buf[4] = (stats.peak_fps >> 0) & 0xFF;
+            buf[5] = (stats.peak_fps >> 8) & 0xFF;
+            buf[6] = (stats.peak_fps >> 16) & 0xFF;
+            buf[7] = (stats.peak_fps >> 24) & 0xFF;
+            buf[8] = (stats.dropped_frames >> 0) & 0xFF;
+            buf[9] = (stats.dropped_frames >> 8) & 0xFF;
+            buf[10] = (stats.dropped_frames >> 16) & 0xFF;
+            buf[11] = (stats.dropped_frames >> 24) & 0xFF;
+            buf[12] = stats.buffer_utilization;
+
+            send_response(RSP_PERF_STATS, buf, 13);
+            break;
+        }
+
         case CMD_GET_STATUS: {
             device_status_t status;
             commands_get_status(&status);
@@ -108,6 +132,7 @@ static void handle_command(uint8_t opcode, const uint8_t *params, uint8_t param_
         }
 
         case CMD_START_CAPTURE:
+            usb_reset_stats();  // Reset counters for new capture session
             g_capture_active = true;
             send_ack();
             break;
