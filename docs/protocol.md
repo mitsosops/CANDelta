@@ -187,6 +187,26 @@ TRANSMIT_FRAME has variable data length after the 3 fixed parameters.
 | 3 | Listen-only | Receive only, no ACKs sent |
 | 4 | Configuration | Register access mode |
 
+## Automatic Bus-Off Recovery
+
+The firmware automatically monitors for CAN bus errors via the MCP2515's error interrupt.
+When bus-off is detected (TEC >= 256), the firmware automatically:
+
+1. Resets the MCP2515 controller (clears TEC/REC)
+2. Restores all saved configuration (timing, filters, masks, mode)
+3. Flashes the red LED (500ms) to indicate recovery
+4. Resumes normal operation
+
+This is essential for request-response protocols (UDS, KWP2000, OBD2) where
+automatic recovery ensures communication can continue after transient errors.
+
+**Error LED Indication:**
+- Bus-off: 500ms red flash (auto-recovery triggered)
+- Warning/Passive: 100ms red flash
+
+**Manual Recovery:**
+Use `CMD_RESET_CAN` (0x27) to manually trigger reset and restore if needed.
+
 ## Error Codes (NAK)
 
 | Code | Description |

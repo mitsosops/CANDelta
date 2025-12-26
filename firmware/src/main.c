@@ -11,6 +11,18 @@
 // Shared state between cores
 volatile bool g_capture_active = false;
 
+// Error callback - flash red LED on bus errors
+static void on_can_error(mcp2515_error_state_t state, bool recovered) {
+    if (state == CAN_STATE_BUS_OFF) {
+        // Bus-off: long red flash (recovery attempted)
+        led_flash(LED_RED, 500);
+    } else if (state >= CAN_STATE_ERROR_WARNING) {
+        // Warning/Passive: short red flash
+        led_flash(LED_RED, 100);
+    }
+    (void)recovered;  // Could send notification to host in future
+}
+
 // Core 1: CAN frame capture (tight polling with optimized receive)
 void core1_entry(void) {
     // Larger buffer to handle bursts - mcp2515_receive_all() loops until INT goes high
@@ -42,6 +54,9 @@ int main(void) {
     commands_init();
     led_init();
 
+    // Register error callback for automatic bus-off recovery with LED feedback
+    mcp2515_set_error_callback(on_can_error);
+
     // Launch Core 1 for CAN capture
     multicore_launch_core1(core1_entry);
 
@@ -52,6 +67,10 @@ int main(void) {
 
         // Send queued CAN frames over USB
         usb_transmit_queued();
+
+        // Check for CAN errors and auto-recover from bus-off
+        // This is checked on Core 0 since recovery is heavyweight
+        mcp2515_check_and_recover_errors();
 
         // Update LED state (handles flash timeout)
         led_update();

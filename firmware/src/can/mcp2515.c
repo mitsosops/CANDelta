@@ -14,6 +14,7 @@ static mcp2515_stats_t stats = {0};
 // Callbacks
 static mcp2515_tx_cb_t tx_callback = NULL;
 static mcp2515_rx_cb_t rx_callback = NULL;
+static mcp2515_error_cb_t error_callback = NULL;
 
 // Stored configuration (survives reset for restore)
 static struct {
@@ -157,8 +158,8 @@ void mcp2515_init(void) {
     spi_write_register(REG_RXB0CTRL, 0x64);  // Accept all + rollover enabled
     spi_write_register(REG_RXB1CTRL, 0x60);  // Accept all
 
-    // Enable RX interrupts
-    spi_write_register(REG_CANINTE, 0x03);
+    // Enable RX + Error interrupts (for bus-off auto-recovery)
+    spi_write_register(REG_CANINTE, 0x23);  // RX0IE + RX1IE + ERRIE
 
     // Default to LISTEN-ONLY mode for passive monitoring
     // Use mcp2515_set_mode(NORMAL) before TX or when CANDelta is only receiver
@@ -225,8 +226,8 @@ bool mcp2515_reset_and_restore(void) {
         spi_write_register(REG_RXB1CTRL, 0x60);  // Accept all
     }
 
-    // Enable RX interrupts
-    spi_write_register(REG_CANINTE, 0x03);
+    // Enable RX + Error interrupts (for bus-off auto-recovery)
+    spi_write_register(REG_CANINTE, 0x23);  // RX0IE + RX1IE + ERRIE
 
     // Restore one-shot mode if enabled
     if (saved_config.oneshot_enabled) {
@@ -830,4 +831,56 @@ void mcp2515_set_tx_callback(mcp2515_tx_cb_t callback) {
 
 void mcp2515_set_rx_callback(mcp2515_rx_cb_t callback) {
     rx_callback = callback;
+}
+
+void mcp2515_set_error_callback(mcp2515_error_cb_t callback) {
+    error_callback = callback;
+}
+
+bool mcp2515_check_and_recover_errors(void) {
+    mutex_enter_blocking(&spi_mutex);
+
+    // Check if error interrupt flag is set
+    uint8_t canintf = spi_read_register(REG_CANINTF);
+    if (!(canintf & 0x20)) {  // ERRIF bit
+        mutex_exit(&spi_mutex);
+        return false;  // No error
+    }
+
+    // Read error flags to determine error type
+    uint8_t eflg = spi_read_register(REG_EFLG);
+
+    // Clear the error interrupt flag
+    spi_modify_register(REG_CANINTF, 0x20, 0x00);
+
+    mutex_exit(&spi_mutex);
+
+    // Determine error state
+    mcp2515_error_state_t state;
+    if (eflg & 0x20) {  // TXBO - Bus-off
+        state = CAN_STATE_BUS_OFF;
+    } else if (eflg & 0x18) {  // TXEP or RXEP
+        state = CAN_STATE_ERROR_PASSIVE;
+    } else if (eflg & 0x07) {  // TXWAR, RXWAR, or EWARN
+        state = CAN_STATE_ERROR_WARNING;
+    } else {
+        state = CAN_STATE_ERROR_ACTIVE;
+    }
+
+    // Track bus errors in stats
+    stats.bus_errors++;
+
+    // Auto-recover from bus-off
+    bool recovered = false;
+    if (state == CAN_STATE_BUS_OFF) {
+        // Automatic bus-off recovery: reset and restore configuration
+        recovered = mcp2515_reset_and_restore();
+    }
+
+    // Notify via callback
+    if (error_callback) {
+        error_callback(state, recovered);
+    }
+
+    return true;  // Error was detected
 }

@@ -60,6 +60,7 @@ typedef struct {
 // Callback types
 typedef void (*mcp2515_tx_cb_t)(bool success);           // TX completion callback
 typedef void (*mcp2515_rx_cb_t)(const can_frame_t *frame); // RX frame callback
+typedef void (*mcp2515_error_cb_t)(mcp2515_error_state_t state, bool recovered); // Error callback
 
 // Initialize MCP2515
 void mcp2515_init(void);
@@ -137,5 +138,11 @@ void mcp2515_reset_stats(void);
 // Callbacks
 void mcp2515_set_tx_callback(mcp2515_tx_cb_t callback);
 void mcp2515_set_rx_callback(mcp2515_rx_cb_t callback);
+void mcp2515_set_error_callback(mcp2515_error_cb_t callback);
+
+// Check for errors and auto-recover from bus-off
+// Call this from the main loop or after interrupt
+// Returns true if an error was detected (and recovered if bus-off)
+bool mcp2515_check_and_recover_errors(void);
 
 #endif // MCP2515_H
