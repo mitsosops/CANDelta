@@ -20,14 +20,14 @@ import struct
 STX = 0x02
 ETX = 0x03
 
-# CANDelta Commands
+# CANDelta Commands (must match firmware/src/protocol/commands.h)
 CMD_PING = 0x01
 CMD_DEBUG = 0x06
+CMD_GET_ERROR_COUNTERS = 0x09
 CMD_START_CAPTURE = 0x10
 CMD_STOP_CAPTURE = 0x11
 CMD_SET_SPEED = 0x20
-CMD_SET_MODE = 0x22
-CMD_GET_ERROR_COUNTERS = 0x09
+CMD_SET_MODE = 0x23  # NOT 0x22 (that's CLEAR_FILTERS!)
 
 # CANDelta Responses
 RSP_ACK = 0x80
@@ -35,6 +35,10 @@ RSP_NAK = 0x81
 RSP_DEBUG = 0x85
 RSP_CAN_FRAME = 0x84
 RSP_ERROR_COUNTERS = 0x88
+
+# MCP2515 Modes
+MODE_NORMAL = 0x00
+MODE_LISTEN_ONLY = 0x03
 
 
 # ============ SLCAN TX Helper Functions ============
@@ -232,6 +236,11 @@ def main():
 
     # ============ TEST 1: 500kbps (should receive frames) ============
     print("TEST 1: Set CANDelta to 500 kbps (should receive frames)")
+
+    # Set NORMAL mode - CANDelta is only receiver, needs to ACK frames
+    # (Default is LISTEN-ONLY which won't ACK, causing TX errors)
+    send_cmd(rx_ser, CMD_SET_MODE, [MODE_NORMAL])
+
     if not set_speed(rx_ser, 500000):
         print("  FAILED: Could not set speed")
         rx_ser.close()

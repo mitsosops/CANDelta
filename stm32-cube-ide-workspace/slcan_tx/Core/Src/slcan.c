@@ -182,20 +182,31 @@ void SLCAN_ProcessCommand(uint8_t *buf, uint16_t len) {
 		  }
 		  break;
 
-	  case 'R': // Reset CAN controller (recover from bus-off)
-		  HAL_CAN_Stop(slcan_hcan);
-		  tx_success_count = 0;
-		  tx_error_count = 0;
-		  last_can_error = 0;
-		  if (can_open) {
-			  if (HAL_CAN_Start(slcan_hcan) == HAL_OK) {
-				  SLCAN_SendResponse("\r");
+	  case 'R': // Reset CAN controller (recover from bus-off, clear TEC/REC)
+		  {
+			  HAL_CAN_Stop(slcan_hcan);
+
+			  // Full peripheral reset via RCC to clear TEC/REC hardware counters
+			  __HAL_RCC_CAN1_FORCE_RESET();
+			  __HAL_RCC_CAN1_RELEASE_RESET();
+
+			  // Re-initialize CAN with same settings
+			  HAL_CAN_Init(slcan_hcan);
+
+			  tx_success_count = 0;
+			  tx_error_count = 0;
+			  last_can_error = 0;
+
+			  if (can_open) {
+				  if (HAL_CAN_Start(slcan_hcan) == HAL_OK) {
+					  SLCAN_SendResponse("\r");
+				  } else {
+					  can_open = 0;
+					  SLCAN_SendResponse("\x07");
+				  }
 			  } else {
-				  can_open = 0;
-				  SLCAN_SendResponse("\x07");
+				  SLCAN_SendResponse("\r");
 			  }
-		  } else {
-			  SLCAN_SendResponse("\r");
 		  }
 		  break;
 

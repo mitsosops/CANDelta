@@ -172,6 +172,8 @@ bool mcp2515_set_mode(mcp2515_mode_t mode) {
         default: return false;
     }
 
+    mutex_enter_blocking(&spi_mutex);
+
     // Clear any pending interrupt flags before mode change
     spi_write_register(REG_CANINTF, 0x00);
 
@@ -183,9 +185,12 @@ bool mcp2515_set_mode(mcp2515_mode_t mode) {
         sleep_ms(1);
         uint8_t status = spi_read_register(REG_CANSTAT);
         if ((status & MODE_MASK) == mode_bits) {
+            mutex_exit(&spi_mutex);
             return true;
         }
     }
+
+    mutex_exit(&spi_mutex);
     return false;
 }
 
