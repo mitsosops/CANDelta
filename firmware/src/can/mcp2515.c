@@ -192,28 +192,57 @@ bool mcp2515_set_mode(mcp2515_mode_t mode) {
 static void reapply_filters_internal(void);
 
 bool mcp2515_set_timing(const mcp2515_timing_t *timing) {
-    // Reset the MCP2515 to ensure clean state
-    mcp2515_reset();
-    sleep_ms(5);
+    mutex_enter_blocking(&spi_mutex);
 
-    // After reset, chip is in CONFIG mode by default
-    // Verify we're in CONFIG mode
-    uint8_t status = spi_read_register(REG_CANSTAT);
-    if ((status & MODE_MASK) != MODE_CONFIG) {
+    // Try to enter CONFIG mode without reset
+    spi_modify_register(REG_CANCTRL, MODE_MASK, MODE_CONFIG);
+
+    // Wait for mode change (MCP2515 won't change if TX in progress)
+    bool in_config = false;
+    for (int i = 0; i < 50; i++) {
+        sleep_ms(1);
+        uint8_t status = spi_read_register(REG_CANSTAT);
+        if ((status & MODE_MASK) == MODE_CONFIG) {
+            in_config = true;
+            break;
+        }
+    }
+
+    if (!in_config) {
+        mutex_exit(&spi_mutex);
         return false;
     }
 
+    // Write timing registers
     spi_write_register(REG_CNF1, timing->cnf1);
     spi_write_register(REG_CNF2, timing->cnf2);
     spi_write_register(REG_CNF3, timing->cnf3);
 
-    // Re-enable RX interrupts
+    // Clear error flags (EFLG) - may have accumulated during wrong-speed operation
+    spi_write_register(REG_EFLG, 0x00);
+
+    // Clear interrupt flags
+    spi_write_register(REG_CANINTF, 0x00);
+
+    // Ensure RX interrupts are enabled
     spi_write_register(REG_CANINTE, 0x03);
 
-    // Reapply stored filter/mask configuration (we're still in CONFIG mode)
-    // This handles both "accept all" and filter modes
+    // Restore RX buffer config (respects filter settings)
     reapply_filters_internal();
 
+    // Return to NORMAL mode (within mutex to prevent race with Core 1)
+    spi_modify_register(REG_CANCTRL, MODE_MASK, MODE_NORMAL);
+
+    // Wait for mode change
+    for (int i = 0; i < 50; i++) {
+        sleep_ms(1);
+        uint8_t status = spi_read_register(REG_CANSTAT);
+        if ((status & MODE_MASK) == MODE_NORMAL) {
+            break;
+        }
+    }
+
+    mutex_exit(&spi_mutex);
     return true;
 }
 

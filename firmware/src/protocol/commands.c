@@ -196,7 +196,7 @@ static void handle_command(uint8_t opcode, const uint8_t *params, uint8_t param_
 
                 if (mcp2515_set_speed(speed)) {
                     g_can_speed = speed;
-                    mcp2515_set_mode(MCP2515_MODE_NORMAL);
+                    // Note: mcp2515_set_timing() already returns to NORMAL mode
                     send_ack();
                 } else {
                     send_nak(0x01);  // Invalid speed
@@ -263,7 +263,7 @@ static void handle_command(uint8_t opcode, const uint8_t *params, uint8_t param_
                 g_capture_active = false;
 
                 if (mcp2515_set_timing(&timing)) {
-                    mcp2515_set_mode(MCP2515_MODE_NORMAL);
+                    // Note: mcp2515_set_timing() already returns to NORMAL mode
                     send_ack();
                 } else {
                     send_nak(0x05);  // Timing config failed
