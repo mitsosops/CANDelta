@@ -35,6 +35,7 @@ to appear in the payload without breaking framing (length-prefixed parsing).
 | 0x24 | SET_TIMING | cnf1:u8, cnf2:u8, cnf3:u8 | Set custom bit timing (advanced) |
 | 0x25 | SET_MASK | mask_num:u8, mask:u32, extended:u8 | Set acceptance mask (0-1) |
 | 0x26 | SET_ONESHOT | enabled:u8 | Enable/disable one-shot TX mode |
+| 0x27 | RESET_CAN | - | Reset CAN controller and restore config (clears TEC/REC) |
 | 0x30 | TRANSMIT_FRAME | id:u32, flags:u8, dlc:u8, data:u8[0-8] | Transmit a CAN frame |
 
 **Note:** Opcodes 0x02 and 0x03 are avoided as they conflict with STX/ETX framing bytes.
@@ -196,6 +197,7 @@ TRANSMIT_FRAME has variable data length after the 3 fixed parameters.
 | 0x04 | Transmit failed |
 | 0x05 | Timing configuration failed |
 | 0x06 | Invalid filter or mask |
+| 0x07 | CAN reset failed |
 | 0xFF | Unknown command |
 
 ## Example: Get Performance Stats

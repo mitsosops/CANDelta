@@ -15,15 +15,24 @@ static mcp2515_stats_t stats = {0};
 static mcp2515_tx_cb_t tx_callback = NULL;
 static mcp2515_rx_cb_t rx_callback = NULL;
 
-// Stored filter/mask configuration (survives reset)
+// Stored configuration (survives reset for restore)
 static struct {
+    // Timing
+    mcp2515_timing_t timing;
+    bool timing_set;
+    mcp2515_mode_t mode;
+
+    // Filters/masks
     mcp2515_filter_t filters[6];
     bool filter_set[6];           // Track which filters are configured
     uint32_t masks[2];
     bool mask_extended[2];
     bool mask_set[2];             // Track which masks are configured
     bool filters_enabled;         // Whether filter mode is active
-} filter_config = {0};
+
+    // TX settings
+    bool oneshot_enabled;
+} saved_config = {0};
 
 // MCP2515 SPI Commands
 #define MCP_RESET       0xC0
@@ -74,6 +83,10 @@ static struct {
 #define MODE_CONFIG     0x80
 #define MODE_MASK       0xE0
 #define CANCTRL_OSM     0x08  // One-Shot Mode bit
+
+// Forward declarations for static helpers
+static uint8_t get_filter_reg(uint8_t filter_num);
+static void write_id_registers(uint8_t base_reg, uint32_t id, bool extended);
 
 static void spi_cs_select(void) {
     gpio_put(MCP2515_PIN_CS, 0);
@@ -160,6 +173,83 @@ void mcp2515_reset(void) {
     spi_cs_deselect();
 }
 
+bool mcp2515_reset_and_restore(void) {
+    mutex_enter_blocking(&spi_mutex);
+
+    // Issue reset command
+    uint8_t cmd = MCP_RESET;
+    spi_cs_select();
+    spi_write_blocking(MCP2515_SPI_PORT, &cmd, 1);
+    spi_cs_deselect();
+
+    sleep_ms(10);  // Wait for reset to complete
+
+    // Verify we're in CONFIG mode (reset default)
+    uint8_t status = spi_read_register(REG_CANSTAT);
+    if ((status & MODE_MASK) != MODE_CONFIG) {
+        mutex_exit(&spi_mutex);
+        return false;
+    }
+
+    // Restore timing if previously set
+    if (saved_config.timing_set) {
+        spi_write_register(REG_CNF1, saved_config.timing.cnf1);
+        spi_write_register(REG_CNF2, saved_config.timing.cnf2);
+        spi_write_register(REG_CNF3, saved_config.timing.cnf3);
+    }
+
+    // Restore filters
+    for (int i = 0; i < 6; i++) {
+        if (saved_config.filter_set[i]) {
+            uint8_t reg = get_filter_reg(i);
+            write_id_registers(reg, saved_config.filters[i].id,
+                              saved_config.filters[i].extended);
+        }
+    }
+
+    // Restore masks
+    for (int i = 0; i < 2; i++) {
+        if (saved_config.mask_set[i]) {
+            uint8_t reg = (i == 0) ? REG_RXM0 : REG_RXM1;
+            write_id_registers(reg, saved_config.masks[i],
+                              saved_config.mask_extended[i]);
+        }
+    }
+
+    // Restore filter mode or default to accept-all
+    if (saved_config.filters_enabled) {
+        spi_write_register(REG_RXB0CTRL, 0x04);  // Filter mode + rollover
+        spi_write_register(REG_RXB1CTRL, 0x00);  // Filter mode
+    } else {
+        spi_write_register(REG_RXB0CTRL, 0x64);  // Accept all + rollover
+        spi_write_register(REG_RXB1CTRL, 0x60);  // Accept all
+    }
+
+    // Enable RX interrupts
+    spi_write_register(REG_CANINTE, 0x03);
+
+    // Restore one-shot mode if enabled
+    if (saved_config.oneshot_enabled) {
+        spi_modify_register(REG_CANCTRL, CANCTRL_OSM, CANCTRL_OSM);
+    }
+
+    // Clear error flags and interrupt flags
+    spi_write_register(REG_EFLG, 0x00);
+    spi_write_register(REG_CANINTF, 0x00);
+
+    mutex_exit(&spi_mutex);
+
+    // Reset statistics
+    mcp2515_reset_stats();
+
+    // Restore mode (defaults to LISTEN_ONLY if not set)
+    mcp2515_mode_t target_mode = saved_config.mode;
+    if (target_mode == MCP2515_MODE_CONFIG) {
+        target_mode = MCP2515_MODE_LISTEN_ONLY;  // Don't stay in config
+    }
+    return mcp2515_set_mode(target_mode);
+}
+
 bool mcp2515_set_mode(mcp2515_mode_t mode) {
     uint8_t mode_bits;
 
@@ -185,6 +275,7 @@ bool mcp2515_set_mode(mcp2515_mode_t mode) {
         sleep_ms(1);
         uint8_t status = spi_read_register(REG_CANSTAT);
         if ((status & MODE_MASK) == mode_bits) {
+            saved_config.mode = mode;  // Save for restore after reset
             mutex_exit(&spi_mutex);
             return true;
         }
@@ -223,6 +314,10 @@ bool mcp2515_set_timing(const mcp2515_timing_t *timing) {
     spi_write_register(REG_CNF1, timing->cnf1);
     spi_write_register(REG_CNF2, timing->cnf2);
     spi_write_register(REG_CNF3, timing->cnf3);
+
+    // Save timing for restore after reset
+    saved_config.timing = *timing;
+    saved_config.timing_set = true;
 
     // Clear error flags (EFLG) - may have accumulated during wrong-speed operation
     spi_write_register(REG_EFLG, 0x00);
@@ -548,8 +643,8 @@ bool mcp2515_set_filter(uint8_t filter_num, const mcp2515_filter_t *filter) {
     write_id_registers(reg, filter->id, filter->extended);
 
     // Store configuration for reapplication after reset
-    filter_config.filters[filter_num] = *filter;
-    filter_config.filter_set[filter_num] = true;
+    saved_config.filters[filter_num] = *filter;
+    saved_config.filter_set[filter_num] = true;
 
     mutex_exit(&spi_mutex);
     return true;
@@ -573,9 +668,9 @@ bool mcp2515_set_mask(uint8_t mask_num, uint32_t mask, bool extended) {
     write_id_registers(reg, mask, extended);
 
     // Store configuration for reapplication after reset
-    filter_config.masks[mask_num] = mask;
-    filter_config.mask_extended[mask_num] = extended;
-    filter_config.mask_set[mask_num] = true;
+    saved_config.masks[mask_num] = mask;
+    saved_config.mask_extended[mask_num] = extended;
+    saved_config.mask_set[mask_num] = true;
 
     mutex_exit(&spi_mutex);
     return true;
@@ -591,7 +686,7 @@ void mcp2515_enable_filters(void) {
     spi_write_register(REG_RXB1CTRL, 0x00);  // Filter mode
 
     // Mark filters as enabled for reapplication after reset
-    filter_config.filters_enabled = true;
+    saved_config.filters_enabled = true;
 
     mutex_exit(&spi_mutex);
 }
@@ -609,12 +704,12 @@ void mcp2515_clear_filters(void) {
 
     // Clear stored filter configuration
     for (int i = 0; i < 6; i++) {
-        filter_config.filter_set[i] = false;
+        saved_config.filter_set[i] = false;
     }
     for (int i = 0; i < 2; i++) {
-        filter_config.mask_set[i] = false;
+        saved_config.mask_set[i] = false;
     }
-    filter_config.filters_enabled = false;
+    saved_config.filters_enabled = false;
 }
 
 uint8_t mcp2515_get_error_flags(void) {
@@ -699,6 +794,7 @@ uint8_t mcp2515_get_rec(void) {
 void mcp2515_set_oneshot_mode(bool enabled) {
     mutex_enter_blocking(&spi_mutex);
     spi_modify_register(REG_CANCTRL, CANCTRL_OSM, enabled ? CANCTRL_OSM : 0);
+    saved_config.oneshot_enabled = enabled;
     mutex_exit(&spi_mutex);
 }
 

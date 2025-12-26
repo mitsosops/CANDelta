@@ -24,6 +24,7 @@ typedef enum {
     CMD_SET_TIMING      = 0x24,  // Custom bit timing (CNF1/2/3)
     CMD_SET_MASK        = 0x25,  // Set acceptance mask
     CMD_SET_ONESHOT     = 0x26,  // Enable/disable one-shot TX mode
+    CMD_RESET_CAN       = 0x27,  // Reset CAN controller and restore config (clears TEC/REC)
     CMD_TRANSMIT_FRAME  = 0x30,
 } command_opcode_t;
 

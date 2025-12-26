@@ -23,6 +23,7 @@ CMD_PING = 0x01
 CMD_DEBUG = 0x06
 CMD_GET_ERROR_COUNTERS = 0x09
 CMD_SET_MODE = 0x23  # NOT 0x22 (that's CLEAR_FILTERS!)
+CMD_RESET_CAN = 0x27  # Reset and restore config (clears TEC/REC)
 
 # CANDelta Responses
 RSP_ACK = 0x80

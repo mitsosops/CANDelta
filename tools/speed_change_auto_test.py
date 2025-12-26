@@ -28,6 +28,7 @@ CMD_START_CAPTURE = 0x10
 CMD_STOP_CAPTURE = 0x11
 CMD_SET_SPEED = 0x20
 CMD_SET_MODE = 0x23  # NOT 0x22 (that's CLEAR_FILTERS!)
+CMD_RESET_CAN = 0x27  # Reset and restore config (clears TEC/REC)
 
 # CANDelta Responses
 RSP_ACK = 0x80

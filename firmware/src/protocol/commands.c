@@ -141,6 +141,7 @@ static void handle_command(uint8_t opcode, const uint8_t *params, uint8_t param_
                 CMD_SET_TIMING, 3,       // cnf1, cnf2, cnf3
                 CMD_SET_MASK, 3,         // mask_num, mask, extended
                 CMD_SET_ONESHOT, 1,      // enabled
+                CMD_RESET_CAN, 0,        // reset and restore config
                 CMD_TRANSMIT_FRAME, 3,   // id, flags, dlc (+ variable data)
             };
             send_response(RSP_COMMAND_LIST, cmd_list, sizeof(cmd_list));
@@ -337,6 +338,23 @@ static void handle_command(uint8_t opcode, const uint8_t *params, uint8_t param_
                 }
             } else {
                 send_nak(0x02);
+            }
+            break;
+
+        case CMD_RESET_CAN:
+            // Reset CAN controller and restore configuration
+            // Use this to recover from bus-off or clear TEC/REC
+            {
+                bool was_capturing = g_capture_active;
+                g_capture_active = false;
+
+                if (mcp2515_reset_and_restore()) {
+                    send_ack();
+                } else {
+                    send_nak(0x07);  // Reset failed
+                }
+
+                g_capture_active = was_capturing;
             }
             break;
 

@@ -67,6 +67,10 @@ void mcp2515_init(void);
 // Reset MCP2515
 void mcp2515_reset(void);
 
+// Reset MCP2515 and restore saved configuration (timing, filters, masks, mode)
+// Use this to recover from bus-off or clear error counters while preserving config
+bool mcp2515_reset_and_restore(void);
+
 // Set operating mode
 bool mcp2515_set_mode(mcp2515_mode_t mode);
 
