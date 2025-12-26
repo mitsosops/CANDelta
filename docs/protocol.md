@@ -23,12 +23,18 @@ to appear in the payload without breaking framing (length-prefixed parsing).
 | 0x05 | GET_STATUS | - | Get device status |
 | 0x06 | DEBUG | - | Get debug info (buffer state, MCP2515 registers) |
 | 0x07 | GET_PERF_STATS | - | Get performance statistics |
+| 0x08 | GET_DEVICE_ID | - | Get unique device ID (8 bytes from RP2040 flash) |
+| 0x09 | GET_ERROR_COUNTERS | - | Get CAN 2.0B error counters (TEC/REC/state) |
+| 0x0A | LIST_COMMANDS | - | List available commands with parameter counts |
 | 0x10 | START_CAPTURE | - | Start CAN frame capture |
 | 0x11 | STOP_CAPTURE | - | Stop CAN frame capture |
 | 0x20 | SET_SPEED | speed:u32 | Set CAN bus speed (bps) |
-| 0x21 | SET_FILTER | filter_num:u8, id:u32, mask:u32, extended:u8 | Set acceptance filter |
-| 0x22 | CLEAR_FILTERS | - | Clear all filters |
+| 0x21 | SET_FILTER | filter_num:u8, id:u32, extended:u8 | Set acceptance filter (0-5) |
+| 0x22 | CLEAR_FILTERS | - | Clear all filters (accept all mode) |
 | 0x23 | SET_MODE | mode:u8 | Set MCP2515 mode |
+| 0x24 | SET_TIMING | cnf1:u8, cnf2:u8, cnf3:u8 | Set custom bit timing (advanced) |
+| 0x25 | SET_MASK | mask_num:u8, mask:u32, extended:u8 | Set acceptance mask (0-1) |
+| 0x26 | SET_ONESHOT | enabled:u8 | Enable/disable one-shot TX mode |
 | 0x30 | TRANSMIT_FRAME | id:u32, flags:u8, dlc:u8, data:u8[0-8] | Transmit a CAN frame |
 
 **Note:** Opcodes 0x02 and 0x03 are avoided as they conflict with STX/ETX framing bytes.
@@ -44,6 +50,9 @@ to appear in the payload without breaking framing (length-prefixed parsing).
 | 0x84 | CAN_FRAME | see below | Captured CAN frame (async) |
 | 0x85 | DEBUG | see below | Debug info |
 | 0x86 | PERF_STATS | see below | Performance statistics |
+| 0x87 | DEVICE_ID | id:u8[8] | Unique device ID (factory-programmed) |
+| 0x88 | ERROR_COUNTERS | see below | CAN 2.0B error counters |
+| 0x89 | COMMAND_LIST | see below | List of available commands |
 
 ## CAN Frame Format (0x84)
 
@@ -108,6 +117,56 @@ Stats are tracked internally at all times with negligible overhead.
 | 10 | cnf1 | 1 | MCP2515 CNF1 register |
 | 11 | reserved | 1 | Reserved |
 
+## Device ID Payload (0x87)
+
+8 bytes: The RP2040's factory-programmed unique ID from flash.
+
+This ID is:
+- Unique per device (factory-burned)
+- Persistent across power cycles and reflashing
+- Useful for identifying specific CANDelta devices
+
+The same ID is also used as the USB serial number, allowing the desktop app to
+match connected USB devices with their protocol-reported IDs.
+
+## Error Counters Payload (0x88)
+
+3 bytes:
+
+| Offset | Field | Size | Description |
+|--------|-------|------|-------------|
+| 0 | tec | 1 | Transmit Error Counter (0-255) |
+| 1 | rec | 1 | Receive Error Counter (0-255) |
+| 2 | error_state | 1 | CAN error state (see below) |
+
+**Error States:**
+
+| Value | State | Description |
+|-------|-------|-------------|
+| 0 | ERROR_ACTIVE | Normal operation (TEC/REC < 96) |
+| 1 | ERROR_WARNING | Warning threshold (TEC or REC >= 96) |
+| 2 | ERROR_PASSIVE | Error passive (TEC or REC >= 128) |
+| 3 | BUS_OFF | Bus-off (TEC >= 256) |
+
+## Command List Payload (0x89)
+
+Variable length: Array of (opcode:u8, param_count:u8) pairs.
+
+Each pair indicates:
+- `opcode`: The command opcode
+- `param_count`: Number of logical parameters (not byte count)
+
+**Example response:**
+```
+02 89 24 01 00 04 00 05 00 ... 20 01 21 03 ... 03
+      |     |     |     |       |     |
+      +- len +- PING,0  +- ...  +- SET_SPEED,1
+                                      +- SET_FILTER,3
+```
+
+**Note:** Multi-byte parameters (e.g., u32) count as 1 parameter.
+TRANSMIT_FRAME has variable data length after the 3 fixed parameters.
+
 ## CAN Speeds
 
 | Value | Speed |
@@ -135,6 +194,8 @@ Stats are tracked internally at all times with negligible overhead.
 | 0x02 | Invalid parameters |
 | 0x03 | Mode change failed |
 | 0x04 | Transmit failed |
+| 0x05 | Timing configuration failed |
+| 0x06 | Invalid filter or mask |
 | 0xFF | Unknown command |
 
 ## Example: Get Performance Stats

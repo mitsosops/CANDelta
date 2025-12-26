@@ -60,6 +60,15 @@ target_link_libraries(candelta
 pico_enable_stdio_usb(candelta 1)
 pico_enable_stdio_uart(candelta 0)
 
+# Custom USB product/manufacturer strings (shows in Device Manager)
+# TODO: Before commercial release, update these to your company/product name:
+#   USBD_MANUFACTURER="YourCompany"
+#   USBD_PRODUCT="YourProduct CAN Analyzer"
+target_compile_definitions(candelta PRIVATE
+    USBD_MANUFACTURER="CANDelta"
+    USBD_PRODUCT="CANDelta CAN Analyzer"
+)
+
 # Create UF2 file for flashing
 pico_add_extra_outputs(candelta)
 

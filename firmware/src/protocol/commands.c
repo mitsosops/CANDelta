@@ -3,6 +3,7 @@
 #include "can/mcp2515.h"
 #include "usb/usb_comm.h"
 #include "led/led.h"
+#include "pico/unique_id.h"
 #include <string.h>
 
 // External state from main.c
@@ -103,6 +104,49 @@ static void handle_command(uint8_t opcode, const uint8_t *params, uint8_t param_
             break;
         }
 
+        case CMD_GET_DEVICE_ID: {
+            pico_unique_board_id_t id;
+            pico_get_unique_board_id(&id);
+            send_response(RSP_DEVICE_ID, id.id, PICO_UNIQUE_BOARD_ID_SIZE_BYTES);
+            break;
+        }
+
+        case CMD_GET_ERROR_COUNTERS: {
+            uint8_t buf[3];
+            buf[0] = mcp2515_get_tec();
+            buf[1] = mcp2515_get_rec();
+            buf[2] = (uint8_t)mcp2515_get_error_state();
+            send_response(RSP_ERROR_COUNTERS, buf, 3);
+            break;
+        }
+
+        case CMD_LIST_COMMANDS: {
+            // Return list of (opcode, param_count) pairs
+            // param_count = number of logical parameters (not byte count)
+            static const uint8_t cmd_list[] = {
+                CMD_PING, 0,
+                CMD_GET_VERSION, 0,
+                CMD_GET_STATUS, 0,
+                CMD_DEBUG, 0,
+                CMD_GET_PERF_STATS, 0,
+                CMD_GET_DEVICE_ID, 0,
+                CMD_GET_ERROR_COUNTERS, 0,
+                CMD_LIST_COMMANDS, 0,
+                CMD_START_CAPTURE, 0,
+                CMD_STOP_CAPTURE, 0,
+                CMD_SET_SPEED, 1,        // speed
+                CMD_SET_FILTER, 3,       // filter_num, id, extended
+                CMD_CLEAR_FILTERS, 0,
+                CMD_SET_MODE, 1,         // mode
+                CMD_SET_TIMING, 3,       // cnf1, cnf2, cnf3
+                CMD_SET_MASK, 3,         // mask_num, mask, extended
+                CMD_SET_ONESHOT, 1,      // enabled
+                CMD_TRANSMIT_FRAME, 3,   // id, flags, dlc (+ variable data)
+            };
+            send_response(RSP_COMMAND_LIST, cmd_list, sizeof(cmd_list));
+            break;
+        }
+
         case CMD_GET_STATUS: {
             device_status_t status;
             commands_get_status(&status);
@@ -165,8 +209,30 @@ static void handle_command(uint8_t opcode, const uint8_t *params, uint8_t param_
             break;
 
         case CMD_SET_FILTER:
-            // TODO: Implement filter setting
-            send_ack();
+            if (param_len >= 6) {
+                uint8_t filter_num = params[0];
+                mcp2515_filter_t filter;
+                filter.id = params[1] | (params[2] << 8) |
+                           (params[3] << 16) | (params[4] << 24);
+                filter.extended = (params[5] & 0x01) != 0;
+                filter.mask = 0xFFFFFFFF;  // Full match by default
+
+                // Enter config mode, set filter, enable filtering, return to normal
+                if (mcp2515_set_mode(MCP2515_MODE_CONFIG)) {
+                    if (mcp2515_set_filter(filter_num, &filter)) {
+                        mcp2515_enable_filters();
+                        mcp2515_set_mode(MCP2515_MODE_NORMAL);
+                        send_ack();
+                    } else {
+                        mcp2515_set_mode(MCP2515_MODE_NORMAL);
+                        send_nak(0x06);  // Invalid filter
+                    }
+                } else {
+                    send_nak(0x03);  // Mode change failed
+                }
+            } else {
+                send_nak(0x02);
+            }
             break;
 
         case CMD_CLEAR_FILTERS:
@@ -181,6 +247,62 @@ static void handle_command(uint8_t opcode, const uint8_t *params, uint8_t param_
                 } else {
                     send_nak(0x03);  // Mode change failed
                 }
+            } else {
+                send_nak(0x02);
+            }
+            break;
+
+        case CMD_SET_TIMING:
+            if (param_len >= 3) {
+                mcp2515_timing_t timing;
+                timing.cnf1 = params[0];
+                timing.cnf2 = params[1];
+                timing.cnf3 = params[2];
+
+                bool was_capturing = g_capture_active;
+                g_capture_active = false;
+
+                if (mcp2515_set_timing(&timing)) {
+                    mcp2515_set_mode(MCP2515_MODE_NORMAL);
+                    send_ack();
+                } else {
+                    send_nak(0x05);  // Timing config failed
+                }
+
+                g_capture_active = was_capturing;
+            } else {
+                send_nak(0x02);
+            }
+            break;
+
+        case CMD_SET_MASK:
+            if (param_len >= 6) {
+                uint8_t mask_num = params[0];
+                uint32_t mask = params[1] | (params[2] << 8) |
+                               (params[3] << 16) | (params[4] << 24);
+                bool extended = params[5] != 0;
+
+                // Enter config mode, set mask, return to normal
+                if (mcp2515_set_mode(MCP2515_MODE_CONFIG)) {
+                    if (mcp2515_set_mask(mask_num, mask, extended)) {
+                        mcp2515_set_mode(MCP2515_MODE_NORMAL);
+                        send_ack();
+                    } else {
+                        mcp2515_set_mode(MCP2515_MODE_NORMAL);
+                        send_nak(0x06);  // Invalid mask
+                    }
+                } else {
+                    send_nak(0x03);  // Mode change failed
+                }
+            } else {
+                send_nak(0x02);
+            }
+            break;
+
+        case CMD_SET_ONESHOT:
+            if (param_len >= 1) {
+                mcp2515_set_oneshot_mode(params[0] != 0);
+                send_ack();
             } else {
                 send_nak(0x02);
             }

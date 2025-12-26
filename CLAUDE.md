@@ -148,3 +148,8 @@ Binary protocol over USB CDC. See `docs/protocol.md` for full specification.
 - Adafruit Feather RP2040 CAN (MCP25625 = MCP2515 + TJA1042 transceiver)
 - 16MHz crystal for CAN timing calculations
 - SPI1 on pins: MISO=12, MOSI=15, SCK=14, CS=9, INT=11
+
+## Git Commit Rules
+
+- Do NOT add AI attribution (emoji, "Generated with Claude", "Co-Authored-By" lines, etc.) to commit messages
+- Keep commit messages concise and focused on the changes made

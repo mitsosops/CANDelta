@@ -12,12 +12,18 @@ typedef enum {
     CMD_GET_STATUS      = 0x05,
     CMD_DEBUG           = 0x06,
     CMD_GET_PERF_STATS  = 0x07,
+    CMD_GET_DEVICE_ID   = 0x08,  // Get unique device ID
+    CMD_GET_ERROR_COUNTERS = 0x09,  // Get TEC/REC/ErrorState
+    CMD_LIST_COMMANDS   = 0x0A,  // List available commands
     CMD_START_CAPTURE   = 0x10,
     CMD_STOP_CAPTURE    = 0x11,
     CMD_SET_SPEED       = 0x20,
     CMD_SET_FILTER      = 0x21,
     CMD_CLEAR_FILTERS   = 0x22,
     CMD_SET_MODE        = 0x23,
+    CMD_SET_TIMING      = 0x24,  // Custom bit timing (CNF1/2/3)
+    CMD_SET_MASK        = 0x25,  // Set acceptance mask
+    CMD_SET_ONESHOT     = 0x26,  // Enable/disable one-shot TX mode
     CMD_TRANSMIT_FRAME  = 0x30,
 } command_opcode_t;
 
@@ -30,6 +36,9 @@ typedef enum {
     RSP_CAN_FRAME       = 0x84,  // Async CAN frame data
     RSP_DEBUG           = 0x85,
     RSP_PERF_STATS      = 0x86,
+    RSP_DEVICE_ID       = 0x87,  // Unique device ID (8 bytes)
+    RSP_ERROR_COUNTERS  = 0x88,  // TEC + REC + ErrorState
+    RSP_COMMAND_LIST    = 0x89,  // List of available commands
 } response_code_t;
 
 // Device status

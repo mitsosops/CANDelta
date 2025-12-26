@@ -8,6 +8,23 @@
 // Mutex to protect SPI access between cores
 static mutex_t spi_mutex;
 
+// Statistics tracking
+static mcp2515_stats_t stats = {0};
+
+// Callbacks
+static mcp2515_tx_cb_t tx_callback = NULL;
+static mcp2515_rx_cb_t rx_callback = NULL;
+
+// Stored filter/mask configuration (survives reset)
+static struct {
+    mcp2515_filter_t filters[6];
+    bool filter_set[6];           // Track which filters are configured
+    uint32_t masks[2];
+    bool mask_extended[2];
+    bool mask_set[2];             // Track which masks are configured
+    bool filters_enabled;         // Whether filter mode is active
+} filter_config = {0};
+
 // MCP2515 SPI Commands
 #define MCP_RESET       0xC0
 #define MCP_READ        0x03
@@ -34,6 +51,20 @@ static mutex_t spi_mutex;
 #define REG_TXB0CTRL    0x30
 #define REG_RXB0CTRL    0x60
 #define REG_RXB1CTRL    0x70
+#define REG_TEC         0x1C  // Transmit Error Counter
+#define REG_REC         0x1D  // Receive Error Counter
+
+// Filter registers (each is 4 bytes: SIDH, SIDL, EID8, EID0)
+#define REG_RXF0        0x00
+#define REG_RXF1        0x04
+#define REG_RXF2        0x08
+#define REG_RXF3        0x10  // Note: not sequential!
+#define REG_RXF4        0x14
+#define REG_RXF5        0x18
+
+// Mask registers (each is 4 bytes: SIDH, SIDL, EID8, EID0)
+#define REG_RXM0        0x20
+#define REG_RXM1        0x24
 
 // Mode bits in CANCTRL
 #define MODE_NORMAL     0x00
@@ -42,6 +73,7 @@ static mutex_t spi_mutex;
 #define MODE_LISTEN     0x60
 #define MODE_CONFIG     0x80
 #define MODE_MASK       0xE0
+#define CANCTRL_OSM     0x08  // One-Shot Mode bit
 
 static void spi_cs_select(void) {
     gpio_put(MCP2515_PIN_CS, 0);
@@ -156,7 +188,10 @@ bool mcp2515_set_mode(mcp2515_mode_t mode) {
     return false;
 }
 
-bool mcp2515_set_speed(uint32_t speed_bps) {
+// Forward declarations for internal helpers
+static void reapply_filters_internal(void);
+
+bool mcp2515_set_timing(const mcp2515_timing_t *timing) {
     // Reset the MCP2515 to ensure clean state
     mcp2515_reset();
     sleep_ms(5);
@@ -168,38 +203,42 @@ bool mcp2515_set_speed(uint32_t speed_bps) {
         return false;
     }
 
+    spi_write_register(REG_CNF1, timing->cnf1);
+    spi_write_register(REG_CNF2, timing->cnf2);
+    spi_write_register(REG_CNF3, timing->cnf3);
+
+    // Re-enable RX interrupts
+    spi_write_register(REG_CANINTE, 0x03);
+
+    // Reapply stored filter/mask configuration (we're still in CONFIG mode)
+    // This handles both "accept all" and filter modes
+    reapply_filters_internal();
+
+    return true;
+}
+
+bool mcp2515_set_speed(uint32_t speed_bps) {
     // CNF values for 16MHz crystal (from arduino-mcp2515 library)
-    uint8_t cnf1, cnf2, cnf3;
+    mcp2515_timing_t timing;
 
     switch (speed_bps) {
         case CAN_SPEED_125KBPS:
-            cnf1 = 0x03; cnf2 = 0xF0; cnf3 = 0x86;
+            timing.cnf1 = 0x03; timing.cnf2 = 0xF0; timing.cnf3 = 0x86;
             break;
         case CAN_SPEED_250KBPS:
-            cnf1 = 0x41; cnf2 = 0xF1; cnf3 = 0x85;
+            timing.cnf1 = 0x41; timing.cnf2 = 0xF1; timing.cnf3 = 0x85;
             break;
         case CAN_SPEED_500KBPS:
-            cnf1 = 0x00; cnf2 = 0xF0; cnf3 = 0x86;
+            timing.cnf1 = 0x00; timing.cnf2 = 0xF0; timing.cnf3 = 0x86;
             break;
         case CAN_SPEED_1MBPS:
-            cnf1 = 0x00; cnf2 = 0xD0; cnf3 = 0x82;
+            timing.cnf1 = 0x00; timing.cnf2 = 0xD0; timing.cnf3 = 0x82;
             break;
         default:
             return false;
     }
 
-    spi_write_register(REG_CNF1, cnf1);
-    spi_write_register(REG_CNF2, cnf2);
-    spi_write_register(REG_CNF3, cnf3);
-
-    // Reconfigure RX buffers to accept all messages (reset clears these)
-    spi_write_register(REG_RXB0CTRL, 0x64);  // Accept all + rollover enabled
-    spi_write_register(REG_RXB1CTRL, 0x60);  // Accept all
-
-    // Re-enable RX interrupts
-    spi_write_register(REG_CANINTE, 0x03);
-
-    return true;
+    return mcp2515_set_timing(&timing);
 }
 
 bool mcp2515_receive(can_frame_t *frame) {
@@ -329,6 +368,8 @@ int mcp2515_receive_all(can_frame_t *frames, int max_frames) {
 
             parse_rx_buffer(buf, &frames[count]);
             frames[count].timestamp_us = time_us_64();
+            stats.rx_frames++;
+            if (rx_callback) rx_callback(&frames[count]);
             count++;
         }
 
@@ -344,6 +385,8 @@ int mcp2515_receive_all(can_frame_t *frames, int max_frames) {
 
             parse_rx_buffer(buf, &frames[count]);
             frames[count].timestamp_us = time_us_64();
+            stats.rx_frames++;
+            if (rx_callback) rx_callback(&frames[count]);
             count++;
         }
 
@@ -369,6 +412,8 @@ bool mcp2515_transmit(const can_frame_t *frame) {
     uint8_t status = spi_read_register(REG_TXB0CTRL);
     if (status & 0x08) {
         mutex_exit(&spi_mutex);
+        stats.tx_errors++;
+        if (tx_callback) tx_callback(false);
         return false;  // TX in progress
     }
 
@@ -405,16 +450,141 @@ bool mcp2515_transmit(const can_frame_t *frame) {
     spi_write_blocking(MCP2515_SPI_PORT, &cmd, 1);
     spi_cs_deselect();
 
+    stats.tx_frames++;
+    mutex_exit(&spi_mutex);
+
+    if (tx_callback) tx_callback(true);
+    return true;
+}
+
+// Helper: get filter register base address
+static uint8_t get_filter_reg(uint8_t filter_num) {
+    static const uint8_t filter_regs[] = {
+        REG_RXF0, REG_RXF1, REG_RXF2,
+        REG_RXF3, REG_RXF4, REG_RXF5
+    };
+    return (filter_num < 6) ? filter_regs[filter_num] : 0;
+}
+
+// Helper: write ID to filter/mask registers
+static void write_id_registers(uint8_t base_reg, uint32_t id, bool extended) {
+    uint8_t buf[4];
+
+    if (extended) {
+        // 29-bit extended ID
+        buf[0] = (id >> 21) & 0xFF;                           // SIDH: SID[10:3]
+        buf[1] = ((id >> 13) & 0xE0) | 0x08 | ((id >> 16) & 0x03);  // SIDL: SID[2:0] + EXIDE + EID[17:16]
+        buf[2] = (id >> 8) & 0xFF;                            // EID8: EID[15:8]
+        buf[3] = id & 0xFF;                                   // EID0: EID[7:0]
+    } else {
+        // 11-bit standard ID
+        buf[0] = (id >> 3) & 0xFF;    // SIDH: SID[10:3]
+        buf[1] = (id << 5) & 0xE0;    // SIDL: SID[2:0], EXIDE=0
+        buf[2] = 0;                   // EID8: unused
+        buf[3] = 0;                   // EID0: unused
+    }
+
+    for (int i = 0; i < 4; i++) {
+        spi_write_register(base_reg + i, buf[i]);
+    }
+}
+
+// Reapply stored filter/mask configuration after reset
+// Called from mcp2515_set_timing() while in CONFIG mode
+// Note: Does NOT acquire mutex (caller must hold it or be in init context)
+static void reapply_filters_internal(void) {
+    if (!filter_config.filters_enabled) {
+        // No filters enabled - set "accept all" mode
+        spi_write_register(REG_RXB0CTRL, 0x64);  // Accept all + rollover enabled
+        spi_write_register(REG_RXB1CTRL, 0x60);  // Accept all
+        return;
+    }
+
+    // Filters are enabled - restore masks first (must be set before filters)
+    for (int i = 0; i < 2; i++) {
+        if (filter_config.mask_set[i]) {
+            uint8_t reg = (i == 0) ? REG_RXM0 : REG_RXM1;
+            write_id_registers(reg, filter_config.masks[i], filter_config.mask_extended[i]);
+        }
+    }
+
+    // Restore filters
+    for (int i = 0; i < 6; i++) {
+        if (filter_config.filter_set[i]) {
+            uint8_t reg = get_filter_reg(i);
+            write_id_registers(reg, filter_config.filters[i].id, filter_config.filters[i].extended);
+        }
+    }
+
+    // Set filter mode on RX buffers
+    spi_write_register(REG_RXB0CTRL, 0x04);  // Filter mode + rollover
+    spi_write_register(REG_RXB1CTRL, 0x00);  // Filter mode
+}
+
+bool mcp2515_set_filter(uint8_t filter_num, const mcp2515_filter_t *filter) {
+    if (filter_num > 5 || filter == NULL) {
+        return false;
+    }
+
+    mutex_enter_blocking(&spi_mutex);
+
+    // Must be in config mode to set filters
+    uint8_t status = spi_read_register(REG_CANSTAT);
+    if ((status & MODE_MASK) != MODE_CONFIG) {
+        mutex_exit(&spi_mutex);
+        return false;
+    }
+
+    uint8_t reg = get_filter_reg(filter_num);
+    write_id_registers(reg, filter->id, filter->extended);
+
+    // Store configuration for reapplication after reset
+    filter_config.filters[filter_num] = *filter;
+    filter_config.filter_set[filter_num] = true;
+
     mutex_exit(&spi_mutex);
     return true;
 }
 
-void mcp2515_set_filter(uint8_t filter_num, uint32_t id, uint32_t mask, bool extended) {
-    (void)filter_num;
-    (void)id;
-    (void)mask;
-    (void)extended;
-    // TODO: Implement filter configuration
+bool mcp2515_set_mask(uint8_t mask_num, uint32_t mask, bool extended) {
+    if (mask_num > 1) {
+        return false;
+    }
+
+    mutex_enter_blocking(&spi_mutex);
+
+    // Must be in config mode to set masks
+    uint8_t status = spi_read_register(REG_CANSTAT);
+    if ((status & MODE_MASK) != MODE_CONFIG) {
+        mutex_exit(&spi_mutex);
+        return false;
+    }
+
+    uint8_t reg = (mask_num == 0) ? REG_RXM0 : REG_RXM1;
+    write_id_registers(reg, mask, extended);
+
+    // Store configuration for reapplication after reset
+    filter_config.masks[mask_num] = mask;
+    filter_config.mask_extended[mask_num] = extended;
+    filter_config.mask_set[mask_num] = true;
+
+    mutex_exit(&spi_mutex);
+    return true;
+}
+
+void mcp2515_enable_filters(void) {
+    mutex_enter_blocking(&spi_mutex);
+
+    // Configure RXB0 and RXB1 to use filters (clear RXM bits)
+    // RXM[1:0] = 00 means use filters and masks
+    // Keep BUKT (rollover) enabled for RXB0
+    spi_write_register(REG_RXB0CTRL, 0x04);  // Filter mode + rollover
+    spi_write_register(REG_RXB1CTRL, 0x00);  // Filter mode
+
+    // Mark filters as enabled for reapplication after reset
+    filter_config.filters_enabled = true;
+
+    mutex_exit(&spi_mutex);
 }
 
 void mcp2515_clear_filters(void) {
@@ -422,6 +592,15 @@ void mcp2515_clear_filters(void) {
     spi_write_register(REG_RXB0CTRL, 0x64);  // Accept all + rollover enabled
     spi_write_register(REG_RXB1CTRL, 0x60);  // Accept all
     mcp2515_set_mode(MCP2515_MODE_NORMAL);
+
+    // Clear stored filter configuration
+    for (int i = 0; i < 6; i++) {
+        filter_config.filter_set[i] = false;
+    }
+    for (int i = 0; i < 2; i++) {
+        filter_config.mask_set[i] = false;
+    }
+    filter_config.filters_enabled = false;
 }
 
 uint8_t mcp2515_get_error_flags(void) {
@@ -429,6 +608,31 @@ uint8_t mcp2515_get_error_flags(void) {
     uint8_t val = spi_read_register(REG_EFLG);
     mutex_exit(&spi_mutex);
     return val;
+}
+
+mcp2515_error_state_t mcp2515_get_error_state(void) {
+    mutex_enter_blocking(&spi_mutex);
+    uint8_t eflg = spi_read_register(REG_EFLG);
+    mutex_exit(&spi_mutex);
+
+    // EFLG bit interpretation:
+    // Bit 5 (0x20): TXBO - Bus-off
+    // Bit 4 (0x10): TXEP - TX Error Passive
+    // Bit 3 (0x08): RXEP - RX Error Passive
+    // Bit 2 (0x04): TXWAR - TX Warning (TEC >= 96)
+    // Bit 1 (0x02): RXWAR - RX Warning (REC >= 96)
+    // Bit 0 (0x01): EWARN - Error Warning (TEC or REC >= 96)
+
+    if (eflg & 0x20) {
+        return CAN_STATE_BUS_OFF;
+    }
+    if (eflg & 0x18) {  // TXEP or RXEP
+        return CAN_STATE_ERROR_PASSIVE;
+    }
+    if (eflg & 0x07) {  // TXWAR, RXWAR, or EWARN
+        return CAN_STATE_ERROR_WARNING;
+    }
+    return CAN_STATE_ERROR_ACTIVE;
 }
 
 uint8_t mcp2515_get_canintf(void) {
@@ -457,4 +661,58 @@ bool mcp2515_is_ready(void) {
     uint8_t status = spi_read_register(REG_CANSTAT);
     mutex_exit(&spi_mutex);
     return (status & MODE_MASK) == MODE_NORMAL;
+}
+
+uint8_t mcp2515_get_tec(void) {
+    mutex_enter_blocking(&spi_mutex);
+    uint8_t val = spi_read_register(REG_TEC);
+    mutex_exit(&spi_mutex);
+    return val;
+}
+
+uint8_t mcp2515_get_rec(void) {
+    mutex_enter_blocking(&spi_mutex);
+    uint8_t val = spi_read_register(REG_REC);
+    mutex_exit(&spi_mutex);
+    return val;
+}
+
+void mcp2515_set_oneshot_mode(bool enabled) {
+    mutex_enter_blocking(&spi_mutex);
+    spi_modify_register(REG_CANCTRL, CANCTRL_OSM, enabled ? CANCTRL_OSM : 0);
+    mutex_exit(&spi_mutex);
+}
+
+void mcp2515_get_stats(mcp2515_stats_t *out) {
+    mutex_enter_blocking(&spi_mutex);
+
+    // Copy current stats
+    out->rx_frames = stats.rx_frames;
+    out->tx_frames = stats.tx_frames;
+    out->tx_errors = stats.tx_errors;
+
+    // Read overflow/error flags from EFLG register
+    uint8_t eflg = spi_read_register(REG_EFLG);
+    out->rx_overflows = (eflg & 0xC0) ? 1 : 0;  // RX0OVR or RX1OVR
+    out->bus_errors = (eflg & 0x3F) ? 1 : 0;    // Any error flag
+
+    mutex_exit(&spi_mutex);
+}
+
+void mcp2515_reset_stats(void) {
+    mutex_enter_blocking(&spi_mutex);
+    stats.rx_frames = 0;
+    stats.tx_frames = 0;
+    stats.tx_errors = 0;
+    stats.rx_overflows = 0;
+    stats.bus_errors = 0;
+    mutex_exit(&spi_mutex);
+}
+
+void mcp2515_set_tx_callback(mcp2515_tx_cb_t callback) {
+    tx_callback = callback;
+}
+
+void mcp2515_set_rx_callback(mcp2515_rx_cb_t callback) {
+    rx_callback = callback;
 }
