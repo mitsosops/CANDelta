@@ -70,6 +70,9 @@ void mcp2515_reset(void);
 // Set operating mode
 bool mcp2515_set_mode(mcp2515_mode_t mode);
 
+// Get current operating mode
+mcp2515_mode_t mcp2515_get_mode(void);
+
 // Set CAN bus speed
 bool mcp2515_set_speed(uint32_t speed_bps);
 
@@ -108,8 +111,8 @@ uint8_t mcp2515_get_error_flags(void);
 // Get interpreted error state (from EFLG register)
 mcp2515_error_state_t mcp2515_get_error_state(void);
 
-// Check if MCP2515 is ready
-bool mcp2515_is_ready(void);
+// Check if MCP2515 is ready for TX (in NORMAL mode)
+bool mcp2515_is_tx_ready(void);
 
 // Debug registers
 uint8_t mcp2515_get_canintf(void);

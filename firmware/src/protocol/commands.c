@@ -218,8 +218,7 @@ static void handle_command(uint8_t opcode, const uint8_t *params, uint8_t param_
                 filter.mask = 0xFFFFFFFF;  // Full match by default
 
                 // Save current mode to restore after
-                uint8_t prev_canstat = mcp2515_get_canstat();
-                mcp2515_mode_t prev_mode = (mcp2515_mode_t)((prev_canstat >> 5) & 0x07);
+                mcp2515_mode_t prev_mode = mcp2515_get_mode();
 
                 // Enter config mode, set filter, enable filtering, restore mode
                 if (mcp2515_set_mode(MCP2515_MODE_CONFIG)) {
@@ -287,8 +286,7 @@ static void handle_command(uint8_t opcode, const uint8_t *params, uint8_t param_
                 bool extended = params[5] != 0;
 
                 // Save current mode to restore after
-                uint8_t prev_canstat = mcp2515_get_canstat();
-                mcp2515_mode_t prev_mode = (mcp2515_mode_t)((prev_canstat >> 5) & 0x07);
+                mcp2515_mode_t prev_mode = mcp2515_get_mode();
 
                 // Enter config mode, set mask, restore mode
                 if (mcp2515_set_mode(MCP2515_MODE_CONFIG)) {

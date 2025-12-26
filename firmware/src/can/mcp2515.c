@@ -593,14 +593,14 @@ void mcp2515_enable_filters(void) {
 
 void mcp2515_clear_filters(void) {
     // Save current mode to restore after
-    uint8_t prev_mode = mcp2515_get_canstat() & 0xE0;
+    mcp2515_mode_t prev_mode = mcp2515_get_mode();
 
     mcp2515_set_mode(MCP2515_MODE_CONFIG);
     spi_write_register(REG_RXB0CTRL, 0x64);  // Accept all + rollover enabled
     spi_write_register(REG_RXB1CTRL, 0x60);  // Accept all
 
     // Restore previous mode
-    mcp2515_set_mode((mcp2515_mode_t)(prev_mode >> 5));
+    mcp2515_set_mode(prev_mode);
 
     // Clear stored filter configuration
     for (int i = 0; i < 6; i++) {
@@ -665,11 +665,16 @@ uint8_t mcp2515_get_cnf1(void) {
     return val;
 }
 
-bool mcp2515_is_ready(void) {
+mcp2515_mode_t mcp2515_get_mode(void) {
     mutex_enter_blocking(&spi_mutex);
     uint8_t status = spi_read_register(REG_CANSTAT);
     mutex_exit(&spi_mutex);
-    return (status & MODE_MASK) == MODE_NORMAL;
+    return (mcp2515_mode_t)((status & MODE_MASK) >> 5);
+}
+
+bool mcp2515_is_tx_ready(void) {
+    // TX only works in NORMAL mode
+    return mcp2515_get_mode() == MCP2515_MODE_NORMAL;
 }
 
 uint8_t mcp2515_get_tec(void) {
