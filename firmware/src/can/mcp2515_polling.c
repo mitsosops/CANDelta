@@ -8,50 +8,9 @@
 // ============================================================================
 
 bool mcp2515_receive(can_frame_t *frame) {
-    // Check interrupt pin (active low) - fast GPIO check before SPI
-    if (gpio_get(MCP2515_PIN_INT)) {
-        return false;  // No interrupt, no data
-    }
-
-    mcp2515_spi_lock();
-
-    // Use fast READ_STATUS command (2 bytes vs 3 for register read)
-    uint8_t status = spi_read_status_raw();
-
-    if (status & 0x01) {  // RX0IF bit
-        // RX buffer 0 has data - READ_RX0 command auto-clears RX0IF
-        uint8_t cmd = MCP_READ_RX0;
-        uint8_t buf[13];
-
-        spi_cs_select();
-        spi_write_blocking(MCP2515_SPI_PORT, &cmd, 1);
-        spi_read_blocking(MCP2515_SPI_PORT, 0, buf, 13);
-        spi_cs_deselect();
-
-        mcp2515_parse_rx_buffer(buf, frame);
-
-        mcp2515_spi_unlock();
-        return true;
-    }
-
-    if (status & 0x02) {  // RX1IF bit
-        // RX buffer 1 has data - READ_RX1 command auto-clears RX1IF
-        uint8_t cmd = MCP_READ_RX1;
-        uint8_t buf[13];
-
-        spi_cs_select();
-        spi_write_blocking(MCP2515_SPI_PORT, &cmd, 1);
-        spi_read_blocking(MCP2515_SPI_PORT, 0, buf, 13);
-        spi_cs_deselect();
-
-        mcp2515_parse_rx_buffer(buf, frame);
-
-        mcp2515_spi_unlock();
-        return true;
-    }
-
-    mcp2515_spi_unlock();
-    return false;
+    // Delegate to mcp2515_receive_all() for consistent behavior
+    // (timestamp, stats, callback all handled in receive_all)
+    return mcp2515_receive_all(frame, 1) > 0;
 }
 
 int mcp2515_receive_all(can_frame_t *frames, int max_frames) {
@@ -78,13 +37,8 @@ int mcp2515_receive_all(can_frame_t *frames, int max_frames) {
 
         // Read RXB0 if has data
         if (rx_flags & 0x01) {
-            uint8_t cmd = MCP_READ_RX0;
             uint8_t buf[13];
-
-            spi_cs_select();
-            spi_write_blocking(MCP2515_SPI_PORT, &cmd, 1);
-            spi_read_blocking(MCP2515_SPI_PORT, 0, buf, 13);
-            spi_cs_deselect();
+            mcp2515_read_rxb(MCP_READ_RX0, buf);
 
             mcp2515_parse_rx_buffer(buf, &frames[count]);
             frames[count].timestamp_us = time_us_64();
@@ -97,13 +51,8 @@ int mcp2515_receive_all(can_frame_t *frames, int max_frames) {
 
         // Read RXB1 if has data
         if (rx_flags & 0x02) {
-            uint8_t cmd = MCP_READ_RX1;
             uint8_t buf[13];
-
-            spi_cs_select();
-            spi_write_blocking(MCP2515_SPI_PORT, &cmd, 1);
-            spi_read_blocking(MCP2515_SPI_PORT, 0, buf, 13);
-            spi_cs_deselect();
+            mcp2515_read_rxb(MCP_READ_RX1, buf);
 
             mcp2515_parse_rx_buffer(buf, &frames[count]);
             frames[count].timestamp_us = time_us_64();

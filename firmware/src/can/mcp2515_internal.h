@@ -195,4 +195,19 @@ void mcp2515_write_id_registers(uint8_t base_reg, uint32_t id, bool extended);
 // Parse RX buffer data into frame structure
 void mcp2515_parse_rx_buffer(const uint8_t *buf, can_frame_t *frame);
 
+// ============================================================================
+// Shared RX buffer read helper
+// ============================================================================
+
+// Read RX buffer using fast READ_RX0/RX1 commands (auto-clears flags)
+// IMPORTANT: Caller must hold SPI lock (mcp2515_spi_lock or spinlock in IRQ)
+// cmd: MCP_READ_RX0 (0x90) or MCP_READ_RX1 (0x94)
+// buf: Output buffer, 13 bytes [SIDH, SIDL, EID8, EID0, DLC, D0-D7]
+static inline void mcp2515_read_rxb(uint8_t cmd, uint8_t buf[13]) {
+    spi_cs_select();
+    spi_write_blocking(MCP2515_SPI_PORT, &cmd, 1);
+    spi_read_blocking(MCP2515_SPI_PORT, 0, buf, 13);
+    spi_cs_deselect();
+}
+
 #endif // MCP2515_INTERNAL_H

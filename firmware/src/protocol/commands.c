@@ -26,7 +26,7 @@ static uint32_t calculate_speed_from_cnf(uint8_t cnf1, uint8_t cnf2, uint8_t cnf
 static uint8_t cmd_buffer[CMD_BUFFER_SIZE];
 static uint8_t cmd_len = 0;
 static uint8_t cmd_expected_len = 0;  // Expected payload length
-static enum { WAIT_STX, READ_OPCODE, READ_LEN, READ_PAYLOAD, WAIT_ETX } parse_state = WAIT_STX;
+static enum { WAIT_STX, READ_OPCODE, READ_LEN, READ_PAYLOAD, WAIT_ETX, DISCARD_UNTIL_ETX } parse_state = WAIT_STX;
 
 static void send_response(response_code_t code, const uint8_t *data, uint8_t len) {
     uint8_t packet[64];
@@ -490,6 +490,10 @@ void commands_process(void) {
                 cmd_expected_len = byte;
                 if (cmd_expected_len == 0) {
                     parse_state = WAIT_ETX;
+                } else if (cmd_expected_len > CMD_BUFFER_SIZE - 2) {
+                    // Payload too large - NAK and discard until ETX to resync
+                    send_nak(0x08);  // Error code: payload too large
+                    parse_state = DISCARD_UNTIL_ETX;
                 } else {
                     parse_state = READ_PAYLOAD;
                 }
@@ -515,6 +519,15 @@ void commands_process(void) {
                 // Reset for next packet (even if ETX was wrong)
                 parse_state = WAIT_STX;
                 cmd_len = 0;
+                break;
+
+            case DISCARD_UNTIL_ETX:
+                // Discard bytes until ETX arrives, then resync
+                // This handles oversized payloads without getting stuck
+                if (byte == 0x03) {
+                    parse_state = WAIT_STX;
+                    cmd_len = 0;
+                }
                 break;
         }
     }

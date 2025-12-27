@@ -3,49 +3,87 @@
 #include "led/led.h"
 #include "pico/stdlib.h"
 #include "pico/mutex.h"
+#include "hardware/sync.h"  // For __dmb() and spin_lock
 #include <stdio.h>
 #include <string.h>
 
-// Ring buffer for CAN frames (Core 1 writes, Core 0 reads)
-static can_frame_t frame_buffer[CAN_RX_BUFFER_SIZE];
-static volatile uint16_t buffer_head = 0;
-static volatile uint16_t buffer_tail = 0;
-static mutex_t buffer_mutex;
+// ============================================================================
+// Lock-free SPSC Ring Buffer
+// Core 1 (producer) writes frames, Core 0 (consumer) reads and sends to USB
+// ============================================================================
 
-// Frame counters
-static volatile uint32_t rx_frame_count = 0;
-static volatile uint32_t tx_to_host_count = 0;
-static volatile uint32_t dropped_frame_count = 0;
+// Buffer size must be power-of-2 for efficient bitmask operations
+#define BUFFER_MASK (CAN_RX_BUFFER_SIZE - 1)
+_Static_assert((CAN_RX_BUFFER_SIZE & BUFFER_MASK) == 0, "CAN_RX_BUFFER_SIZE must be power of 2");
+
+static can_frame_t frame_buffer[CAN_RX_BUFFER_SIZE];
+static volatile uint32_t buffer_head = 0;  // Written by Core 1 (producer)
+static volatile uint32_t buffer_tail = 0;  // Written by Core 0 (consumer)
+
+// Spinlock for atomic stats reset (not used in hot path)
+static spin_lock_t *stats_spinlock;
+static uint32_t stats_spinlock_num;
+
+// Frame counters - each counter is only written by one core to avoid contention
+static volatile uint32_t rx_frame_count = 0;       // Core 1 writes
+static volatile uint32_t tx_to_host_count = 0;     // Core 0 writes
+static volatile uint32_t dropped_frame_count = 0;  // Core 1 writes
 
 // Performance tracking
-static volatile uint32_t fps_counter = 0;          // Frames in current second
-static volatile uint32_t current_fps = 0;          // Last calculated FPS
-static volatile uint32_t peak_fps = 0;             // Maximum FPS observed
+static volatile uint32_t fps_counter = 0;          // Core 1 writes
+static volatile uint32_t current_fps = 0;          // Core 0 writes
+static volatile uint32_t peak_fps = 0;             // Core 0 writes
 static absolute_time_t last_fps_update;
 
+// ============================================================================
+// LED Throttling - flash at most every 100ms instead of every frame
+// ============================================================================
+static absolute_time_t last_led_flash_time;
+#define LED_FLASH_INTERVAL_US (100 * 1000)  // 100ms in microseconds
+
+// ============================================================================
+// Flush Batching - batch multiple frames before stdio_flush()
+// ============================================================================
+static uint32_t frames_since_flush = 0;
+static absolute_time_t last_flush_time;
+#define FLUSH_FRAME_BATCH 8
+#define FLUSH_TIME_US (2 * 1000)  // 2ms max latency
+
 void usb_comm_init(void) {
-    mutex_init(&buffer_mutex);
+    // Claim spinlock for stats reset
+    stats_spinlock_num = spin_lock_claim_unused(true);
+    stats_spinlock = spin_lock_instance(stats_spinlock_num);
+
+    // Initialize timing variables
     last_fps_update = get_absolute_time();
+    last_led_flash_time = get_absolute_time();
+    last_flush_time = get_absolute_time();
 }
 
+// Producer (Core 1) - lock-free
 bool usb_queue_frame(const can_frame_t *frame) {
-    mutex_enter_blocking(&buffer_mutex);
+    uint32_t head = buffer_head;
+    uint32_t next_head = (head + 1) & BUFFER_MASK;
 
-    uint16_t next_head = (buffer_head + 1) % CAN_RX_BUFFER_SIZE;
-
+    // Check if buffer full (read tail without lock - safe for SPSC)
     if (next_head == buffer_tail) {
-        // Buffer full - frame dropped
-        dropped_frame_count++;
-        mutex_exit(&buffer_mutex);
+        dropped_frame_count++;  // Only Core 1 writes this
         return false;
     }
 
-    memcpy((void*)&frame_buffer[buffer_head], frame, sizeof(can_frame_t));
+    // Write frame data
+    memcpy((void*)&frame_buffer[head], frame, sizeof(can_frame_t));
+
+    // Memory barrier: ensure frame data visible before head update
+    __dmb();
+
+    // Publish head (atomic write visible to consumer)
     buffer_head = next_head;
+
+    // Update stats (only Core 1 writes these)
     rx_frame_count++;
     fps_counter++;
 
-    mutex_exit(&buffer_mutex);
     return true;
 }
 
@@ -53,19 +91,45 @@ uint32_t usb_get_rx_count(void) {
     return rx_frame_count;
 }
 
-void usb_transmit_queued(void) {
-    while (buffer_tail != buffer_head) {
-        mutex_enter_blocking(&buffer_mutex);
+// Write frame data with batched flushing (for CAN frame streaming)
+static void usb_write_frame(const uint8_t *data, int len) {
+    for (int i = 0; i < len; i++) {
+        putchar_raw(data[i]);
+    }
+    frames_since_flush++;
 
-        if (buffer_tail == buffer_head) {
-            mutex_exit(&buffer_mutex);
-            break;
+    absolute_time_t now = get_absolute_time();
+    int64_t elapsed = absolute_time_diff_us(last_flush_time, now);
+
+    // Flush on batch size OR time limit
+    if (frames_since_flush >= FLUSH_FRAME_BATCH || elapsed >= FLUSH_TIME_US || elapsed < 0) {
+        stdio_flush();
+        frames_since_flush = 0;
+        last_flush_time = now;
+    }
+}
+
+// Consumer (Core 0) - lock-free
+void usb_transmit_queued(void) {
+    while (true) {
+        uint32_t tail = buffer_tail;
+
+        if (tail == buffer_head) {
+            break;  // Empty
         }
 
-        can_frame_t frame = frame_buffer[buffer_tail];
-        buffer_tail = (buffer_tail + 1) % CAN_RX_BUFFER_SIZE;
+        // Memory barrier: AFTER seeing non-empty, BEFORE reading frame data
+        // This ensures frame data written by producer is visible to us
+        __dmb();
 
-        mutex_exit(&buffer_mutex);
+        // Read frame data
+        can_frame_t frame = frame_buffer[tail];
+
+        // Memory barrier: ensure frame read completes before updating tail
+        __dmb();
+
+        // Publish tail (tells producer this slot is free)
+        buffer_tail = (tail + 1) & BUFFER_MASK;
 
         // Serialize frame to wire format
         // Format: [STX][opcode][len][timestamp:8][id:4][flags:1][dlc:1][data:0-8][ETX]
@@ -102,11 +166,23 @@ void usb_transmit_queued(void) {
 
         packet[idx++] = 0x03;  // ETX
 
-        usb_write(packet, idx);
-        tx_to_host_count++;
+        usb_write_frame(packet, idx);
+        tx_to_host_count++;  // Only Core 0 writes this
 
-        // Flash blue for each CAN frame sent to host
-        led_flash(LED_BLUE, 20);
+        // LED throttling: flash at most every 100ms
+        absolute_time_t now = get_absolute_time();
+        int64_t elapsed = absolute_time_diff_us(last_led_flash_time, now);
+        if (elapsed >= LED_FLASH_INTERVAL_US || elapsed < 0) {
+            led_flash(LED_BLUE, 20);
+            last_led_flash_time = now;
+        }
+    }
+
+    // Flush any remaining data after draining
+    if (frames_since_flush > 0) {
+        stdio_flush();
+        frames_since_flush = 0;
+        last_flush_time = get_absolute_time();
     }
 }
 
@@ -114,11 +190,11 @@ uint32_t usb_get_tx_to_host_count(void) {
     return tx_to_host_count;
 }
 
-uint16_t usb_get_buffer_head(void) {
+uint32_t usb_get_buffer_head(void) {
     return buffer_head;
 }
 
-uint16_t usb_get_buffer_tail(void) {
+uint32_t usb_get_buffer_tail(void) {
     return buffer_tail;
 }
 
@@ -163,19 +239,17 @@ void usb_get_perf_stats(perf_stats_t *stats) {
     stats->dropped_frames = dropped_frame_count;
 
     // Calculate buffer utilization (0-100%)
-    uint16_t head = buffer_head;
-    uint16_t tail = buffer_tail;
-    uint16_t used;
-    if (head >= tail) {
-        used = head - tail;
-    } else {
-        used = CAN_RX_BUFFER_SIZE - tail + head;
-    }
+    uint32_t head = buffer_head;
+    uint32_t tail = buffer_tail;
+    uint32_t used = (head - tail) & BUFFER_MASK;
     stats->buffer_utilization = (used * 100) / CAN_RX_BUFFER_SIZE;
 }
 
+// Reset all stats atomically using spinlock
+// This is the only place that touches both head and tail from the same context
 void usb_reset_stats(void) {
-    mutex_enter_blocking(&buffer_mutex);
+    uint32_t save = spin_lock_blocking(stats_spinlock);
+
     rx_frame_count = 0;
     tx_to_host_count = 0;
     dropped_frame_count = 0;
@@ -185,5 +259,6 @@ void usb_reset_stats(void) {
     buffer_head = 0;
     buffer_tail = 0;
     last_fps_update = get_absolute_time();
-    mutex_exit(&buffer_mutex);
+
+    spin_unlock(stats_spinlock, save);
 }

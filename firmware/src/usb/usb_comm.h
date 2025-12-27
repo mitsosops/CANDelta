@@ -41,8 +41,8 @@ uint32_t usb_get_rx_count(void);
 uint32_t usb_get_tx_to_host_count(void);
 
 // Debug: buffer state
-uint16_t usb_get_buffer_head(void);
-uint16_t usb_get_buffer_tail(void);
+uint32_t usb_get_buffer_head(void);
+uint32_t usb_get_buffer_tail(void);
 
 // Performance monitoring
 void usb_get_perf_stats(perf_stats_t *stats);
