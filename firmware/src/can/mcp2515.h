@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include "can_config.h"
 
 // CAN frame structure
 typedef struct {
@@ -123,6 +124,7 @@ bool mcp2515_is_tx_ready(void);
 uint8_t mcp2515_get_canintf(void);
 uint8_t mcp2515_get_canstat(void);
 uint8_t mcp2515_get_cnf1(void);
+uint8_t mcp2515_get_txb0ctrl(void);  // TX buffer 0 control (TXREQ, etc.)
 
 // Error counters (CAN 2.0B)
 uint8_t mcp2515_get_tec(void);  // Transmit Error Counter
@@ -144,5 +146,32 @@ void mcp2515_set_error_callback(mcp2515_error_cb_t callback);
 // Call this from the main loop or after interrupt
 // Returns true if an error was detected (and recovered if bus-off)
 bool mcp2515_check_and_recover_errors(void);
+
+// ============================================================================
+// Configuration API
+// ============================================================================
+
+// Get pointer to current configuration (read-only)
+const can_config_t* mcp2515_get_config(void);
+
+// Read all configuration-related registers from MCP2515
+void mcp2515_get_registers(can_registers_t *regs);
+
+// Check if actual registers match intended config
+can_config_status_t mcp2515_check_config(void);
+
+// Set rollover mode (RXB0 overflow goes to RXB1)
+void mcp2515_set_rollover(bool enabled);
+
+// Capture state management
+void mcp2515_set_capture_active(bool active);
+bool mcp2515_get_capture_active(void);
+
+// Additional register getters
+uint8_t mcp2515_get_cnf2(void);
+uint8_t mcp2515_get_cnf3(void);
+uint8_t mcp2515_get_canctrl(void);
+uint8_t mcp2515_get_rxb0ctrl(void);
+uint8_t mcp2515_get_rxb1ctrl(void);
 
 #endif // MCP2515_H

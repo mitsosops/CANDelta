@@ -26,6 +26,8 @@ to appear in the payload without breaking framing (length-prefixed parsing).
 | 0x08 | GET_DEVICE_ID | - | Get unique device ID (8 bytes from RP2040 flash) |
 | 0x09 | GET_ERROR_COUNTERS | - | Get CAN 2.0B error counters (TEC/REC/state) |
 | 0x0A | LIST_COMMANDS | - | List available commands with parameter counts |
+| 0x0B | GET_CONFIG | - | Get full device configuration |
+| 0x0C | GET_REGISTERS | - | Get raw MCP2515 register values |
 | 0x10 | START_CAPTURE | - | Start CAN frame capture |
 | 0x11 | STOP_CAPTURE | - | Stop CAN frame capture |
 | 0x20 | SET_SPEED | speed:u32 | Set CAN bus speed (bps) |
@@ -54,6 +56,8 @@ to appear in the payload without breaking framing (length-prefixed parsing).
 | 0x87 | DEVICE_ID | id:u8[8] | Unique device ID (factory-programmed) |
 | 0x88 | ERROR_COUNTERS | see below | CAN 2.0B error counters |
 | 0x89 | COMMAND_LIST | see below | List of available commands |
+| 0x8A | CONFIG | see below | Full device configuration |
+| 0x8B | REGISTERS | see below | Raw MCP2515 register values |
 
 ## CAN Frame Format (0x84)
 
@@ -116,7 +120,7 @@ Stats are tracked internally at all times with negligible overhead.
 | 8 | canstat | 1 | MCP2515 CANSTAT register |
 | 9 | eflg | 1 | MCP2515 error flags |
 | 10 | cnf1 | 1 | MCP2515 CNF1 register |
-| 11 | reserved | 1 | Reserved |
+| 11 | txb0ctrl | 1 | MCP2515 TXB0CTRL register (TXREQ, TXERR, ABTF) |
 
 ## Device ID Payload (0x87)
 
@@ -167,6 +171,79 @@ Each pair indicates:
 
 **Note:** Multi-byte parameters (e.g., u32) count as 1 parameter.
 TRANSMIT_FRAME has variable data length after the 3 fixed parameters.
+
+## Config Payload (0x8A)
+
+49 bytes: Full device configuration (intended settings).
+
+| Offset | Field | Size | Description |
+|--------|-------|------|-------------|
+| 0 | speed_bps | 4 | CAN speed in bps (LE), 0 if custom timing |
+| 4 | cnf1 | 1 | Timing register CNF1 |
+| 5 | cnf2 | 1 | Timing register CNF2 |
+| 6 | cnf3 | 1 | Timing register CNF3 |
+| 7 | mode | 1 | Operating mode (0-4) |
+| 8 | flags | 1 | Configuration flags (see below) |
+| 9 | filters | 30 | 6 filters × 5 bytes each |
+| 39 | masks | 10 | 2 masks × 5 bytes each |
+
+**Flags byte:**
+
+| Bit | Name | Description |
+|-----|------|-------------|
+| 0 | custom_timing | 1 if SET_TIMING was used instead of SET_SPEED |
+| 1 | filters_active | 1 if filtering enabled (vs accept-all) |
+| 2 | rollover_enabled | 1 if RXB0 overflow rolls to RXB1 |
+| 3 | oneshot_enabled | 1 if one-shot TX mode enabled |
+| 4 | capture_active | 1 if capture is running |
+
+**Filter format (5 bytes each):**
+
+| Offset | Field | Size | Description |
+|--------|-------|------|-------------|
+| 0 | id | 4 | Filter ID (LE) |
+| 4 | flags | 1 | bit0=enabled, bit1=extended |
+
+**Mask format (5 bytes each):**
+
+| Offset | Field | Size | Description |
+|--------|-------|------|-------------|
+| 0 | mask | 4 | Mask value (LE) |
+| 4 | flags | 1 | bit0=enabled, bit1=extended |
+
+## Registers Payload (0x8B)
+
+15 bytes: Raw MCP2515 register values (actual hardware state).
+
+| Offset | Field | Size | Description |
+|--------|-------|------|-------------|
+| 0 | cnf1 | 1 | CNF1 register (SJW + BRP) |
+| 1 | cnf2 | 1 | CNF2 register (BTLMODE + SAM + PHSEG1 + PRSEG) |
+| 2 | cnf3 | 1 | CNF3 register (SOF + WAKFIL + PHSEG2) |
+| 3 | canstat | 1 | CANSTAT register (mode in bits 7:5) |
+| 4 | canctrl | 1 | CANCTRL register (OSM in bit 3) |
+| 5 | eflg | 1 | Error flags register |
+| 6 | canintf | 1 | Interrupt flags register |
+| 7 | tec | 1 | Transmit Error Counter |
+| 8 | rec | 1 | Receive Error Counter |
+| 9 | txb0ctrl | 1 | TX buffer 0 control |
+| 10 | txb1ctrl | 1 | TX buffer 1 control |
+| 11 | txb2ctrl | 1 | TX buffer 2 control |
+| 12 | rxb0ctrl | 1 | RX buffer 0 control (filter mode in bits 6:5) |
+| 13 | rxb1ctrl | 1 | RX buffer 1 control |
+| 14 | mismatch_flags | 1 | Config vs register mismatches (see below) |
+
+**Mismatch flags:**
+
+| Bit | Name | Description |
+|-----|------|-------------|
+| 0 | mode_mismatch | Actual mode differs from intended |
+| 1 | timing_mismatch | CNF registers differ from config |
+| 2 | oneshot_mismatch | OSM bit differs from config |
+| 3 | filter_mode_mismatch | RXM bits differ from filters_active |
+
+Use this to detect if the MCP2515 state has diverged from the intended
+configuration (e.g., after an unexpected reset or communication error).
 
 ## CAN Speeds
 

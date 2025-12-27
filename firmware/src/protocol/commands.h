@@ -15,6 +15,8 @@ typedef enum {
     CMD_GET_DEVICE_ID   = 0x08,  // Get unique device ID
     CMD_GET_ERROR_COUNTERS = 0x09,  // Get TEC/REC/ErrorState
     CMD_LIST_COMMANDS   = 0x0A,  // List available commands
+    CMD_GET_CONFIG      = 0x0B,  // Get full configuration
+    CMD_GET_REGISTERS   = 0x0C,  // Get raw register values
     CMD_START_CAPTURE   = 0x10,
     CMD_STOP_CAPTURE    = 0x11,
     CMD_SET_SPEED       = 0x20,
@@ -40,6 +42,8 @@ typedef enum {
     RSP_DEVICE_ID       = 0x87,  // Unique device ID (8 bytes)
     RSP_ERROR_COUNTERS  = 0x88,  // TEC + REC + ErrorState
     RSP_COMMAND_LIST    = 0x89,  // List of available commands
+    RSP_CONFIG          = 0x8A,  // Full configuration
+    RSP_REGISTERS       = 0x8B,  // Raw register values
 } response_code_t;
 
 // Device status

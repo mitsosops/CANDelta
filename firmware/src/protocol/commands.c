@@ -10,8 +10,17 @@
 extern volatile bool g_capture_active;
 
 // Internal state
-static uint32_t g_can_speed = CAN_DEFAULT_SPEED;
 static uint32_t g_tx_count = 0;
+
+// Calculate speed from CNF registers (returns 0 if unknown/custom timing)
+static uint32_t calculate_speed_from_cnf(uint8_t cnf1, uint8_t cnf2, uint8_t cnf3) {
+    // Known CNF values for 16MHz crystal
+    if (cnf1 == 0x03 && cnf2 == 0xF0 && cnf3 == 0x86) return 125000;
+    if (cnf1 == 0x41 && cnf2 == 0xF1 && cnf3 == 0x85) return 250000;
+    if (cnf1 == 0x00 && cnf2 == 0xF0 && cnf3 == 0x86) return 500000;
+    if (cnf1 == 0x00 && cnf2 == 0xD0 && cnf3 == 0x82) return 1000000;
+    return 0;  // Custom timing - can't determine speed
+}
 
 // Command buffer and parser state
 static uint8_t cmd_buffer[CMD_BUFFER_SIZE];
@@ -74,8 +83,8 @@ static void handle_command(uint8_t opcode, const uint8_t *params, uint8_t param_
             buf[7] = mcp2515_get_canintf();   // Interrupt flags
             buf[8] = mcp2515_get_canstat();   // Status/mode
             buf[9] = mcp2515_get_error_flags();
-            buf[10] = mcp2515_get_cnf1();  // Should be 0x01 for 500kbps
-            buf[11] = 0;
+            buf[10] = mcp2515_get_cnf1();  // Should be 0x00 for 500kbps
+            buf[11] = mcp2515_get_txb0ctrl(); // TX buffer 0 ctrl (TXREQ, TXERR, etc.)
             send_response(RSP_DEBUG, buf, 12);
             break;
         }
@@ -120,6 +129,91 @@ static void handle_command(uint8_t opcode, const uint8_t *params, uint8_t param_
             break;
         }
 
+        case CMD_GET_CONFIG: {
+            // Return full configuration
+            // Format: speed(4) + timing(3) + mode(1) + flags(1) + filters(6*5) + masks(2*5) = 49 bytes
+            const can_config_t *cfg = mcp2515_get_config();
+            uint8_t buf[49];
+            int idx = 0;
+
+            // Speed (4 bytes, LE)
+            buf[idx++] = (cfg->speed_bps >> 0) & 0xFF;
+            buf[idx++] = (cfg->speed_bps >> 8) & 0xFF;
+            buf[idx++] = (cfg->speed_bps >> 16) & 0xFF;
+            buf[idx++] = (cfg->speed_bps >> 24) & 0xFF;
+
+            // Timing (3 bytes)
+            buf[idx++] = cfg->timing.cnf1;
+            buf[idx++] = cfg->timing.cnf2;
+            buf[idx++] = cfg->timing.cnf3;
+
+            // Mode (1 byte)
+            buf[idx++] = (uint8_t)cfg->mode;
+
+            // Flags (1 byte): bit0=custom_timing, bit1=filters_active, bit2=rollover, bit3=oneshot, bit4=capture
+            buf[idx++] = (cfg->custom_timing ? 0x01 : 0) |
+                         (cfg->filters_active ? 0x02 : 0) |
+                         (cfg->rollover_enabled ? 0x04 : 0) |
+                         (cfg->oneshot_enabled ? 0x08 : 0) |
+                         (cfg->capture_active ? 0x10 : 0);
+
+            // Filters (6 * 5 bytes each): id(4) + flags(1)
+            for (int i = 0; i < CAN_NUM_FILTERS; i++) {
+                buf[idx++] = (cfg->filters[i].id >> 0) & 0xFF;
+                buf[idx++] = (cfg->filters[i].id >> 8) & 0xFF;
+                buf[idx++] = (cfg->filters[i].id >> 16) & 0xFF;
+                buf[idx++] = (cfg->filters[i].id >> 24) & 0xFF;
+                buf[idx++] = (cfg->filters[i].enabled ? 0x01 : 0) |
+                             (cfg->filters[i].extended ? 0x02 : 0);
+            }
+
+            // Masks (2 * 5 bytes each): mask(4) + flags(1)
+            for (int i = 0; i < CAN_NUM_MASKS; i++) {
+                buf[idx++] = (cfg->masks[i].mask >> 0) & 0xFF;
+                buf[idx++] = (cfg->masks[i].mask >> 8) & 0xFF;
+                buf[idx++] = (cfg->masks[i].mask >> 16) & 0xFF;
+                buf[idx++] = (cfg->masks[i].mask >> 24) & 0xFF;
+                buf[idx++] = (cfg->masks[i].enabled ? 0x01 : 0) |
+                             (cfg->masks[i].extended ? 0x02 : 0);
+            }
+
+            send_response(RSP_CONFIG, buf, idx);
+            break;
+        }
+
+        case CMD_GET_REGISTERS: {
+            // Return raw MCP2515 register values
+            // Format: cnf(3) + canstat(1) + canctrl(1) + eflg(1) + canintf(1) + tec(1) + rec(1)
+            //         + txbNctrl(3) + rxbNctrl(2) = 15 bytes
+            can_registers_t regs;
+            mcp2515_get_registers(&regs);
+
+            uint8_t buf[15];
+            buf[0] = regs.cnf1;
+            buf[1] = regs.cnf2;
+            buf[2] = regs.cnf3;
+            buf[3] = regs.canstat;
+            buf[4] = regs.canctrl;
+            buf[5] = regs.eflg;
+            buf[6] = regs.canintf;
+            buf[7] = regs.tec;
+            buf[8] = regs.rec;
+            buf[9] = regs.txb0ctrl;
+            buf[10] = regs.txb1ctrl;
+            buf[11] = regs.txb2ctrl;
+            buf[12] = regs.rxb0ctrl;
+            buf[13] = regs.rxb1ctrl;
+            // Config status (mismatches)
+            can_config_status_t cstatus = mcp2515_check_config();
+            buf[14] = (cstatus.mode_mismatch ? 0x01 : 0) |
+                      (cstatus.timing_mismatch ? 0x02 : 0) |
+                      (cstatus.oneshot_mismatch ? 0x04 : 0) |
+                      (cstatus.filter_mode_mismatch ? 0x08 : 0);
+
+            send_response(RSP_REGISTERS, buf, 15);
+            break;
+        }
+
         case CMD_LIST_COMMANDS: {
             // Return list of (opcode, param_count) pairs
             // param_count = number of logical parameters (not byte count)
@@ -132,6 +226,8 @@ static void handle_command(uint8_t opcode, const uint8_t *params, uint8_t param_
                 CMD_GET_DEVICE_ID, 0,
                 CMD_GET_ERROR_COUNTERS, 0,
                 CMD_LIST_COMMANDS, 0,
+                CMD_GET_CONFIG, 0,
+                CMD_GET_REGISTERS, 0,
                 CMD_START_CAPTURE, 0,
                 CMD_STOP_CAPTURE, 0,
                 CMD_SET_SPEED, 1,        // speed
@@ -196,8 +292,7 @@ static void handle_command(uint8_t opcode, const uint8_t *params, uint8_t param_
                 g_capture_active = false;
 
                 if (mcp2515_set_speed(speed)) {
-                    g_can_speed = speed;
-                    // mcp2515_set_timing() preserves the current mode
+                    // Speed saved to config in mcp2515_set_speed()
                     send_ack();
                 } else {
                     send_nak(0x01);  // Invalid speed
@@ -426,11 +521,18 @@ void commands_process(void) {
 }
 
 void commands_get_status(device_status_t *status) {
+    const can_config_t *cfg = mcp2515_get_config();
+
+    // Read actual CNF registers and calculate speed
+    can_registers_t regs;
+    mcp2515_get_registers(&regs);
+    uint32_t speed = calculate_speed_from_cnf(regs.cnf1, regs.cnf2, regs.cnf3);
+
     status->protocol_version = PROTOCOL_VERSION;
-    status->mode = 0;  // TODO: Get actual mode
-    status->can_speed = g_can_speed;
-    status->capture_active = g_capture_active;
-    status->error_flags = mcp2515_get_error_flags();
+    status->mode = (uint8_t)cfg->mode;
+    status->can_speed = speed;  // From actual registers
+    status->capture_active = g_capture_active;  // Shared volatile state
+    status->error_flags = regs.eflg;
     status->rx_frame_count = usb_get_rx_count();        // Frames queued (Core 1)
     status->tx_frame_count = usb_get_tx_to_host_count(); // Frames sent to host (Core 0)
 }
