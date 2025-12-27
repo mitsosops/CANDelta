@@ -27,14 +27,28 @@ set(CMAKE_CXX_STANDARD 17)
 # Initialize the Pico SDK
 pico_sdk_init()
 
-# Add executable
+# MCP2515 RX mode selection: "polling" (default) or "irq"
+set(MCP2515_MODE "polling" CACHE STRING "MCP2515 RX mode: polling or irq")
+set_property(CACHE MCP2515_MODE PROPERTY STRINGS "polling" "irq")
+
+# Add executable with common sources
 add_executable(candelta
     src/main.c
-    src/can/mcp2515.c
+    src/can/mcp2515_common.c
     src/usb/usb_comm.c
     src/protocol/commands.c
     src/led/led.c
 )
+
+# Add MCP2515 RX implementation based on mode
+if(MCP2515_MODE STREQUAL "irq")
+    message(STATUS "MCP2515: Using interrupt-driven RX mode")
+    target_sources(candelta PRIVATE src/can/mcp2515_irq.c)
+    target_compile_definitions(candelta PRIVATE MCP2515_USE_IRQ)
+else()
+    message(STATUS "MCP2515: Using polling RX mode")
+    target_sources(candelta PRIVATE src/can/mcp2515_polling.c)
+endif()
 
 # Generate PIO header for WS2812
 pico_generate_pio_header(candelta ${CMAKE_CURRENT_SOURCE_DIR}/src/led/ws2812.pio)

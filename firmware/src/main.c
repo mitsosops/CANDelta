@@ -23,16 +23,40 @@ static void on_can_error(mcp2515_error_state_t state, bool recovered) {
     (void)recovered;  // Could send notification to host in future
 }
 
+#ifdef MCP2515_USE_IRQ
+// Core 1: Drain IRQ buffer to USB queue (IRQ mode)
+// Frames are captured in GPIO IRQ handler, Core 1 just transfers to USB
+void core1_entry(void) {
+    can_frame_t frames[16];  // Larger batch
+
+    while (true) {
+        if (g_capture_active) {
+            // Drain frames from IRQ buffer to USB queue
+            int count = mcp2515_receive_all(frames, 16);
+            for (int i = 0; i < count; i++) {
+                usb_queue_frame(&frames[i]);
+            }
+
+            // Small delay if buffer was empty to reduce CPU usage
+            if (count == 0) {
+                sleep_us(1);  // Minimal sleep
+            }
+        } else {
+            sleep_us(100);
+        }
+    }
+}
+#else
 // Core 1: CAN frame capture (tight polling with optimized receive)
 void core1_entry(void) {
     // Larger buffer to handle bursts - mcp2515_receive_all() loops until INT goes high
-    can_frame_t frames[8];
+    can_frame_t frames[16];  // Larger batch
 
     while (true) {
         if (g_capture_active) {
             // Tight polling - check INT pin and read all available frames
             if (!gpio_get(MCP2515_PIN_INT)) {
-                int count = mcp2515_receive_all(frames, 8);
+                int count = mcp2515_receive_all(frames, 16);
                 for (int i = 0; i < count; i++) {
                     usb_queue_frame(&frames[i]);
                 }
@@ -42,6 +66,7 @@ void core1_entry(void) {
         }
     }
 }
+#endif
 
 // Core 0: USB communication and command processing
 int main(void) {
@@ -53,6 +78,11 @@ int main(void) {
     usb_comm_init();
     commands_init();
     led_init();
+
+#ifdef MCP2515_USE_IRQ
+    // Initialize IRQ mode for interrupt-driven frame reception
+    mcp2515_irq_init();
+#endif
 
     // Register error callback for automatic bus-off recovery with LED feedback
     mcp2515_set_error_callback(on_can_error);

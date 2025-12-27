@@ -174,4 +174,28 @@ uint8_t mcp2515_get_canctrl(void);
 uint8_t mcp2515_get_rxb0ctrl(void);
 uint8_t mcp2515_get_rxb1ctrl(void);
 
+// ============================================================================
+// IRQ Mode API (only available when MCP2515_USE_IRQ is defined)
+// ============================================================================
+
+#ifdef MCP2515_USE_IRQ
+
+// Initialize IRQ mode (call after mcp2515_init)
+// Sets up GPIO interrupt on INT pin for automatic frame reception
+void mcp2515_irq_init(void);
+
+// Deinitialize IRQ mode (disables GPIO interrupt)
+void mcp2515_irq_deinit(void);
+
+// Get number of frames in IRQ receive buffer
+uint32_t mcp2515_irq_buffer_count(void);
+
+// Check if IRQ receive buffer is empty
+bool mcp2515_irq_buffer_empty(void);
+
+// Check if IRQ receive buffer is full
+bool mcp2515_irq_buffer_full(void);
+
+#endif // MCP2515_USE_IRQ
+
 #endif // MCP2515_H
