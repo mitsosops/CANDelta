@@ -89,47 +89,10 @@ int mcp2515_irq_drain(can_frame_t *frames, int max_frames) {
         return 0;  // Nothing pending AND INT is high - truly nothing to do
     }
 
-    int count = 0;
-
-    // Acquire the SAME mutex used by all other SPI operations
-    // Note: IRQ is already disabled by the ISR, so we just need the mutex
-    mutex_enter_blocking(&mcp2515_spi_mutex);
-
-    // Drain while INT is low and we have buffer space
-    while (count < max_frames && !gpio_get(MCP2515_PIN_INT)) {
-        uint8_t status = spi_read_status_raw();
-
-        // Read RXB0 if has data
-        if (status & 0x01) {
-            uint8_t buf[13];
-            mcp2515_read_rxb(MCP_READ_RX0, buf);
-            mcp2515_parse_rx_buffer(buf, &frames[count]);
-            frames[count].timestamp_us = time_us_64();
-            mcp2515_stats.rx_frames++;
-            if (mcp2515_rx_callback) mcp2515_rx_callback(&frames[count]);
-            count++;
-
-            if (count >= max_frames) break;
-        }
-
-        // Read RXB1 if has data
-        if (count < max_frames && (status & 0x02)) {
-            uint8_t buf[13];
-            mcp2515_read_rxb(MCP_READ_RX1, buf);
-            mcp2515_parse_rx_buffer(buf, &frames[count]);
-            frames[count].timestamp_us = time_us_64();
-            mcp2515_stats.rx_frames++;
-            if (mcp2515_rx_callback) mcp2515_rx_callback(&frames[count]);
-            count++;
-        }
-
-        // If no RX flags set, break to avoid infinite loop
-        if ((status & 0x03) == 0) {
-            break;
-        }
-    }
-
-    mutex_exit(&mcp2515_spi_mutex);
+    // Acquire mutex and drain using shared helper
+    mcp2515_spi_lock();
+    int count = mcp2515_drain_rx_locked(frames, max_frames);
+    mcp2515_spi_unlock();
 
     // Clear pending flag and re-enable IRQ
     irq_pending = false;
