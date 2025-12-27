@@ -127,17 +127,19 @@ void mcp2515_reset(void) {
 }
 
 bool mcp2515_reset_and_restore(void) {
-    mcp2515_spi_lock();
-
     // Issue reset command
+    mcp2515_spi_lock();
     uint8_t cmd = MCP_RESET;
     spi_cs_select();
     spi_write_blocking(MCP2515_SPI_PORT, &cmd, 1);
     spi_cs_deselect();
+    mcp2515_spi_unlock();
 
-    sleep_ms(10);  // Wait for reset to complete
+    // Wait for reset to complete - release mutex to allow Core1 to drain
+    sleep_ms(10);
 
     // Verify we're in CONFIG mode (reset default)
+    mcp2515_spi_lock();
     uint8_t status = spi_read_register_raw(REG_CANSTAT);
     if ((status & MODE_MASK) != MODE_CONFIG) {
         mcp2515_spi_unlock();
@@ -230,18 +232,21 @@ bool mcp2515_set_mode(mcp2515_mode_t mode) {
     // Request mode change
     spi_modify_register_raw(REG_CANCTRL, MODE_MASK, mode_bits);
 
+    mcp2515_spi_unlock();
+
     // Wait for mode change with timeout (up to 50ms)
+    // Release mutex during sleep to allow Core1 to drain frames
     for (int i = 0; i < 50; i++) {
         sleep_ms(1);
+        mcp2515_spi_lock();
         uint8_t status = spi_read_register_raw(REG_CANSTAT);
+        mcp2515_spi_unlock();
         if ((status & MODE_MASK) == mode_bits) {
             mcp2515_config.mode = (can_mode_t)mode;  // Save for restore after reset
-            mcp2515_spi_unlock();
             return true;
         }
     }
 
-    mcp2515_spi_unlock();
     return false;
 }
 
@@ -262,8 +267,6 @@ bool mcp2515_is_tx_ready(void) {
 // ============================================================================
 
 bool mcp2515_set_timing(const mcp2515_timing_t *timing) {
-    mcp2515_spi_lock();
-
     // Get previous mode from config (not register - avoids extra SPI read)
     uint8_t prev_mode_bits;
     switch (mcp2515_config.mode) {
@@ -276,13 +279,18 @@ bool mcp2515_set_timing(const mcp2515_timing_t *timing) {
     }
 
     // Try to enter CONFIG mode without reset
+    mcp2515_spi_lock();
     spi_modify_register_raw(REG_CANCTRL, MODE_MASK, MODE_CONFIG);
+    mcp2515_spi_unlock();
 
     // Wait for mode change (MCP2515 won't change if TX in progress)
+    // Release mutex during sleep to allow Core1 to drain frames
     bool in_config = false;
     for (int i = 0; i < 50; i++) {
         sleep_ms(1);
+        mcp2515_spi_lock();
         uint8_t status = spi_read_register_raw(REG_CANSTAT);
+        mcp2515_spi_unlock();
         if ((status & MODE_MASK) == MODE_CONFIG) {
             in_config = true;
             break;
@@ -290,11 +298,12 @@ bool mcp2515_set_timing(const mcp2515_timing_t *timing) {
     }
 
     if (!in_config) {
-        mcp2515_spi_unlock();
         return false;
     }
 
-    // Write timing registers
+    // Write timing registers and clear flags (atomic block)
+    mcp2515_spi_lock();
+
     spi_write_register_raw(REG_CNF1, timing->cnf1);
     spi_write_register_raw(REG_CNF2, timing->cnf2);
     spi_write_register_raw(REG_CNF3, timing->cnf3);
@@ -313,19 +322,22 @@ bool mcp2515_set_timing(const mcp2515_timing_t *timing) {
     // Note: RXBxCTRL, filters, masks, and CANINTE all preserve their values
     // when entering CONFIG mode - only RESET clears them
 
-    // Restore previous mode (within mutex to prevent race with Core 1)
+    // Request restore to previous mode
     spi_modify_register_raw(REG_CANCTRL, MODE_MASK, prev_mode_bits);
 
-    // Wait for mode change
+    mcp2515_spi_unlock();
+
+    // Wait for mode change - release mutex during sleep
     for (int i = 0; i < 50; i++) {
         sleep_ms(1);
+        mcp2515_spi_lock();
         uint8_t status = spi_read_register_raw(REG_CANSTAT);
+        mcp2515_spi_unlock();
         if ((status & MODE_MASK) == prev_mode_bits) {
             break;
         }
     }
 
-    mcp2515_spi_unlock();
     return true;
 }
 

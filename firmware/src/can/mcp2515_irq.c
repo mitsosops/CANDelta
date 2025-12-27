@@ -82,9 +82,11 @@ void mcp2515_irq_deinit(void) {
 // ============================================================================
 
 int mcp2515_irq_drain(can_frame_t *frames, int max_frames) {
-    // Quick check: if no pending flag, nothing to do
-    if (!irq_pending) {
-        return 0;
+    // Check both irq_pending flag AND INT pin state
+    // INT pin is the source of truth - if it's low, frames are waiting
+    // irq_pending might be false if GPIO IRQ was disabled when INT went low
+    if (!irq_pending && gpio_get(MCP2515_PIN_INT)) {
+        return 0;  // Nothing pending AND INT is high - truly nothing to do
     }
 
     int count = 0;

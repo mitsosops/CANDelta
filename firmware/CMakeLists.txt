@@ -27,12 +27,8 @@ set(CMAKE_CXX_STANDARD 17)
 # Initialize the Pico SDK
 pico_sdk_init()
 
-# MCP2515 RX mode selection: "polling" (default) or "irq"
-set(MCP2515_MODE "polling" CACHE STRING "MCP2515 RX mode: polling or irq")
-set_property(CACHE MCP2515_MODE PROPERTY STRINGS "polling" "irq")
-
-# Add executable with common sources
-add_executable(candelta
+# Common source files shared by both builds
+set(COMMON_SOURCES
     src/main.c
     src/can/mcp2515_common.c
     src/usb/usb_comm.c
@@ -40,28 +36,8 @@ add_executable(candelta
     src/led/led.c
 )
 
-# Add MCP2515 RX implementation based on mode
-if(MCP2515_MODE STREQUAL "irq")
-    message(STATUS "MCP2515: Using interrupt-driven RX mode")
-    target_sources(candelta PRIVATE src/can/mcp2515_irq.c)
-    target_compile_definitions(candelta PRIVATE MCP2515_USE_IRQ)
-else()
-    message(STATUS "MCP2515: Using polling RX mode")
-    target_sources(candelta PRIVATE src/can/mcp2515_polling.c)
-endif()
-
-# Generate PIO header for WS2812
-pico_generate_pio_header(candelta ${CMAKE_CURRENT_SOURCE_DIR}/src/led/ws2812.pio)
-
-# Include directories
-target_include_directories(candelta PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/include
-    ${CMAKE_CURRENT_SOURCE_DIR}/src
-    ${CMAKE_CURRENT_BINARY_DIR}
-)
-
-# Link libraries
-target_link_libraries(candelta
+# Common libraries
+set(COMMON_LIBS
     pico_stdlib
     pico_multicore
     hardware_spi
@@ -70,21 +46,50 @@ target_link_libraries(candelta
     pico_unique_id
 )
 
-# Enable USB output, disable UART
-pico_enable_stdio_usb(candelta 1)
-pico_enable_stdio_uart(candelta 0)
+# Helper function to configure a candelta executable
+function(configure_candelta_target TARGET_NAME RX_SOURCE USE_IRQ)
+    add_executable(${TARGET_NAME} ${COMMON_SOURCES} ${RX_SOURCE})
 
-# Custom USB product/manufacturer strings (shows in Device Manager)
-# TODO: Before commercial release, update these to your company/product name:
-#   USBD_MANUFACTURER="YourCompany"
-#   USBD_PRODUCT="YourProduct CAN Analyzer"
-target_compile_definitions(candelta PRIVATE
-    USBD_MANUFACTURER="CANDelta"
-    USBD_PRODUCT="CANDelta CAN Analyzer"
-)
+    # Generate PIO header for WS2812
+    pico_generate_pio_header(${TARGET_NAME} ${CMAKE_CURRENT_SOURCE_DIR}/src/led/ws2812.pio)
 
-# Create UF2 file for flashing
-pico_add_extra_outputs(candelta)
+    # Include directories
+    target_include_directories(${TARGET_NAME} PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CMAKE_CURRENT_BINARY_DIR}
+    )
 
-# Compiler warnings
-target_compile_options(candelta PRIVATE -Wall -Wextra)
+    # Link libraries
+    target_link_libraries(${TARGET_NAME} ${COMMON_LIBS})
+
+    # Enable USB output, disable UART
+    pico_enable_stdio_usb(${TARGET_NAME} 1)
+    pico_enable_stdio_uart(${TARGET_NAME} 0)
+
+    # USB product/manufacturer strings
+    target_compile_definitions(${TARGET_NAME} PRIVATE
+        USBD_MANUFACTURER="CANDelta"
+        USBD_PRODUCT="CANDelta CAN Analyzer"
+    )
+
+    # Add IRQ mode define if needed
+    if(USE_IRQ)
+        target_compile_definitions(${TARGET_NAME} PRIVATE MCP2515_USE_IRQ)
+    endif()
+
+    # Create UF2 file for flashing
+    pico_add_extra_outputs(${TARGET_NAME})
+
+    # Compiler warnings
+    target_compile_options(${TARGET_NAME} PRIVATE -Wall -Wextra)
+endfunction()
+
+# Reminder for commercial release
+message(STATUS "NOTE: Before commercial release, update USBD_MANUFACTURER and USBD_PRODUCT in CMakeLists.txt")
+
+# Build both polling and IRQ versions
+message(STATUS "Building both polling and IRQ firmware variants")
+
+configure_candelta_target(candelta_polling src/can/mcp2515_polling.c FALSE)
+configure_candelta_target(candelta_irq src/can/mcp2515_irq.c TRUE)

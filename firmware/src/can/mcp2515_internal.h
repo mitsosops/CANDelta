@@ -99,23 +99,10 @@ extern mcp2515_rx_cb_t mcp2515_rx_callback;
 extern mcp2515_error_cb_t mcp2515_error_callback;
 
 // ============================================================================
-// SPI mutex wrappers (handle IRQ mode safely)
+// SPI mutex wrappers
+// Same for both polling and IRQ modes - ISR is signal-only and doesn't use SPI
 // ============================================================================
 
-#ifdef MCP2515_USE_IRQ
-// In IRQ mode, disable GPIO interrupt while holding mutex to prevent
-// ISR from accessing SPI while we're in a critical section
-static inline void mcp2515_spi_lock(void) {
-    gpio_set_irq_enabled(MCP2515_PIN_INT, GPIO_IRQ_LEVEL_LOW, false);
-    mutex_enter_blocking(&mcp2515_spi_mutex);
-}
-
-static inline void mcp2515_spi_unlock(void) {
-    mutex_exit(&mcp2515_spi_mutex);
-    gpio_set_irq_enabled(MCP2515_PIN_INT, GPIO_IRQ_LEVEL_LOW, true);
-}
-#else
-// In polling mode, just use the mutex directly
 static inline void mcp2515_spi_lock(void) {
     mutex_enter_blocking(&mcp2515_spi_mutex);
 }
@@ -123,7 +110,6 @@ static inline void mcp2515_spi_lock(void) {
 static inline void mcp2515_spi_unlock(void) {
     mutex_exit(&mcp2515_spi_mutex);
 }
-#endif
 
 // ============================================================================
 // Internal SPI helper functions (defined in mcp2515_common.c)
