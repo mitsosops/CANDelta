@@ -11,15 +11,47 @@ static volatile uint32_t tx_success_count = 0;
 static volatile uint32_t tx_error_count = 0;
 static volatile uint32_t last_can_error = 0;
 
+// Auto-recovery: detect stuck TEC state and reset
+static volatile uint8_t last_tec = 0;
+static volatile uint32_t tec_stuck_ticks = 0;
+#define TEC_STUCK_THRESHOLD 96     // TEC value considered "stuck" if high (error-warning threshold)
+#define TEC_STUCK_TIMEOUT_MS 500   // Time before auto-reset (ms)
+static volatile uint32_t auto_recovery_count = 0;
+
 void SLCAN_Init(CAN_HandleTypeDef *hcan) {
   slcan_hcan = hcan;
   can_open = 0;
   tx_success_count = 0;
   tx_error_count = 0;
   last_can_error = 0;
+  last_tec = 0;
+  tec_stuck_ticks = 0;
+  auto_recovery_count = 0;
 }
 
-// Call this periodically from main loop to check for TX errors
+// Helper to perform CAN reset and recovery
+static void SLCAN_DoReset(void) {
+  HAL_CAN_Stop(slcan_hcan);
+
+  // Full peripheral reset via RCC to clear TEC/REC hardware counters
+  __HAL_RCC_CAN1_FORCE_RESET();
+  __HAL_RCC_CAN1_RELEASE_RESET();
+
+  // Re-initialize CAN with same settings
+  HAL_CAN_Init(slcan_hcan);
+
+  // Restart if was open
+  if (can_open) {
+    HAL_CAN_Start(slcan_hcan);
+  }
+
+  // Reset tracking
+  last_tec = 0;
+  tec_stuck_ticks = 0;
+  auto_recovery_count++;
+}
+
+// Call this periodically from main loop to check for TX errors and auto-recover
 void SLCAN_CheckErrors(void) {
   if (slcan_hcan == NULL) return;
 
@@ -29,6 +61,37 @@ void SLCAN_CheckErrors(void) {
     tx_error_count++;
     // Clear error flags
     __HAL_CAN_CLEAR_FLAG(slcan_hcan, CAN_FLAG_ERRI);
+  }
+
+  // Auto-recovery: detect stuck TEC state
+  // When TEC is high (>=200) and not changing, the bxCAN may be stuck
+  // in error-passive mode without transmitting. Auto-reset to recover.
+  if (can_open) {
+    uint32_t esr = slcan_hcan->Instance->ESR;
+    uint8_t tec = (esr >> 16) & 0xFF;
+
+    if (tec >= TEC_STUCK_THRESHOLD) {
+      // TEC is high - check if it's stuck
+      if (tec == last_tec) {
+        // TEC not changing, increment stuck counter
+        tec_stuck_ticks++;
+
+        // If stuck for too long, auto-reset
+        // Main loop runs very fast, so we use a simple tick count
+        // Approximate: 1000 ticks ~= 500ms at typical loop speed
+        if (tec_stuck_ticks > 1000) {
+          SLCAN_DoReset();
+        }
+      } else {
+        // TEC is changing, reset stuck counter
+        tec_stuck_ticks = 0;
+      }
+      last_tec = tec;
+    } else {
+      // TEC is low, reset tracking
+      last_tec = tec;
+      tec_stuck_ticks = 0;
+    }
   }
 }
 
@@ -128,12 +191,19 @@ void SLCAN_ProcessCommand(uint8_t *buf, uint16_t len) {
 		  SLCAN_SendResponse("NSTM32\r");
 		  break;
 
-	  case 'O': // Open CAN
-		  if (HAL_CAN_Start(slcan_hcan) == HAL_OK) {
-			  can_open = 1;
-			  SLCAN_SendResponse("\r");
-		  } else {
-			  SLCAN_SendResponse("\x07");
+	  case 'O': // Open CAN (normal mode)
+		  {
+			  // Ensure we're in normal mode (not silent)
+			  HAL_CAN_Stop(slcan_hcan);
+			  slcan_hcan->Init.Mode = CAN_MODE_NORMAL;
+			  HAL_CAN_Init(slcan_hcan);
+
+			  if (HAL_CAN_Start(slcan_hcan) == HAL_OK) {
+				  can_open = 1;
+				  SLCAN_SendResponse("\r");
+			  } else {
+				  SLCAN_SendResponse("\x07");
+			  }
 		  }
 		  break;
 
@@ -145,6 +215,26 @@ void SLCAN_ProcessCommand(uint8_t *buf, uint16_t len) {
 
 	  case 'S': // Set baud (ignored, we're fixed at 500k)
 		  SLCAN_SendResponse("\r");
+		  break;
+
+	  case 'L': // Listen-only mode (SILM - no TX, no ACK)
+		  {
+			  // Stop CAN if running
+			  HAL_CAN_Stop(slcan_hcan);
+
+			  // Reconfigure for silent mode
+			  slcan_hcan->Init.Mode = CAN_MODE_SILENT;
+			  if (HAL_CAN_Init(slcan_hcan) == HAL_OK) {
+				  if (HAL_CAN_Start(slcan_hcan) == HAL_OK) {
+					  can_open = 1;
+					  SLCAN_SendResponse("\r");
+				  } else {
+					  SLCAN_SendResponse("\x07");
+				  }
+			  } else {
+				  SLCAN_SendResponse("\x07");
+			  }
+		  }
 		  break;
 
 	  case 'F': // Read status flags (returns actual CAN error state)
@@ -167,17 +257,18 @@ void SLCAN_ProcessCommand(uint8_t *buf, uint16_t len) {
 		  }
 		  break;
 
-	  case 'E': // Extended status (custom command): returns TEC,REC,tx_ok,tx_err
+	  case 'E': // Extended status (custom command): returns TEC,REC,tx_ok,tx_err,auto_recover
 		  {
 			  SLCAN_CheckErrors();
 			  uint32_t esr = slcan_hcan->Instance->ESR;
 			  uint8_t tec = (esr >> 16) & 0xFF;
 			  uint8_t rec = (esr >> 24) & 0xFF;
-			  static char resp[32];
-			  snprintf(resp, sizeof(resp), "E%02X%02X%04lX%04lX\r",
+			  static char resp[40];
+			  snprintf(resp, sizeof(resp), "E%02X%02X%04lX%04lX%02lX\r",
 					   tec, rec,
 					   tx_success_count & 0xFFFF,
-					   tx_error_count & 0xFFFF);
+					   tx_error_count & 0xFFFF,
+					   auto_recovery_count & 0xFF);
 			  SLCAN_SendResponse(resp);
 		  }
 		  break;
