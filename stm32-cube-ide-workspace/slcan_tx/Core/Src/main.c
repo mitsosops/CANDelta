@@ -102,6 +102,8 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+    // Check for CAN errors periodically (non-blocking)
+    SLCAN_CheckErrors();
   }
   /* USER CODE END 3 */
 }

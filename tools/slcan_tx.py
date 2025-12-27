@@ -70,16 +70,27 @@ def slcan_close(ser):
 def main():
     if len(sys.argv) < 2:
         print("Usage: slcan_tx.py <COM_PORT> [num_frames] [interval_ms]")
+        print("       slcan_tx.py <COM_PORT> loop [interval_ms]  - continuous mode")
         print("Example: slcan_tx.py COM3 100 20")
+        print("         slcan_tx.py COM8 loop 20")
         return
 
     port = sys.argv[1]
-    num_frames = int(sys.argv[2]) if len(sys.argv) > 2 else 100
-    interval_ms = int(sys.argv[3]) if len(sys.argv) > 3 else 20
+    loop_mode = len(sys.argv) > 2 and sys.argv[2].lower() == 'loop'
+
+    if loop_mode:
+        num_frames = 0  # infinite
+        interval_ms = int(sys.argv[3]) if len(sys.argv) > 3 else 20
+    else:
+        num_frames = int(sys.argv[2]) if len(sys.argv) > 2 else 100
+        interval_ms = int(sys.argv[3]) if len(sys.argv) > 3 else 20
 
     print(f"SLCAN TX Test - {port}")
     print("=" * 50)
-    print(f"Frames: {num_frames}, Interval: {interval_ms}ms ({1000/interval_ms:.0f} Hz)")
+    if loop_mode:
+        print(f"Mode: CONTINUOUS (Ctrl+C to stop), Interval: {interval_ms}ms ({1000/interval_ms:.0f} Hz)")
+    else:
+        print(f"Frames: {num_frames}, Interval: {interval_ms}ms ({1000/interval_ms:.0f} Hz)")
     print("=" * 50)
 
     # Open serial - CANHacker typically uses 115200 or 1000000 baud
@@ -99,41 +110,53 @@ def main():
     print("\nInitializing adapter...")
     slcan_init(ser, 500000)
 
-    print(f"\nSending {num_frames} frames with ID=0x123...")
+    if loop_mode:
+        print(f"\nSending continuous frames with ID=0x123...")
+    else:
+        print(f"\nSending {num_frames} frames with ID=0x123...")
     print("Monitor on CANDelta now!\n")
     time.sleep(1)
 
     sent = 0
     errors = 0
     start = time.time()
+    i = 0
 
-    for i in range(num_frames):
-        # Frame: ID=0x123, data=sequence counter
-        data = [i & 0xFF, (i >> 8) & 0xFF, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF]
+    try:
+        while loop_mode or i < num_frames:
+            # Frame: ID=0x123, data=sequence counter
+            data = [i & 0xFF, (i >> 8) & 0xFF, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF]
 
-        slcan_send(ser, 0x123, data)
-        sent += 1
+            slcan_send(ser, 0x123, data)
+            sent += 1
 
-        # Small delay to let serial TX complete
-        time.sleep(0.002)
+            # Small delay to let serial TX complete
+            time.sleep(0.002)
 
-        # Check for response/error - \r means OK, \x07 means error
-        resp = ser.read(ser.in_waiting)
-        if resp and b'\x07' in resp:  # BEL = error
-            errors += 1
+            # Check for response/error - \r means OK, \x07 means error
+            resp = ser.read(ser.in_waiting)
+            if resp and b'\x07' in resp:  # BEL = error
+                errors += 1
 
-        # Inter-frame delay
-        time.sleep(interval_ms / 1000.0)
+            # Inter-frame delay
+            time.sleep(interval_ms / 1000.0)
 
-        if (i + 1) % 10 == 0:
-            print(f"\r  Sent: {sent}, Errors: {errors}", end="", flush=True)
+            if (i + 1) % 10 == 0:
+                elapsed = time.time() - start
+                rate = sent / elapsed if elapsed > 0 else 0
+                print(f"\r  Sent: {sent}, Errors: {errors}, Rate: {rate:.0f} fps", end="", flush=True)
+
+            i += 1
+
+    except KeyboardInterrupt:
+        print("\n\nStopped by user.")
 
     elapsed = time.time() - start
 
     slcan_close(ser)
     ser.close()
 
-    print(f"\n\n{'=' * 50}")
+    print(f"\n{'=' * 50}")
     print("RESULTS")
     print("=" * 50)
     print(f"  Sent: {sent}")

@@ -114,14 +114,17 @@ def slcan_close(ser):
 
 def main():
     if len(sys.argv) < 3:
-        print("Usage: trc_playback.py <TRC_FILE> <COM_PORT> [speed_multiplier]")
+        print("Usage: trc_playback.py <TRC_FILE> <COM_PORT> [speed_multiplier] [loop]")
         print("Example: trc_playback.py trace.trc COM8 1.0")
+        print("         trc_playback.py trace.trc COM8 1.0 loop")
         print("  speed_multiplier: 1.0 = realtime, 2.0 = 2x speed, 0 = as fast as possible")
+        print("  loop: repeat trace continuously (Ctrl+C to stop)")
         return
 
     trc_file = sys.argv[1]
     port = sys.argv[2]
     speed_mult = float(sys.argv[3]) if len(sys.argv) > 3 else 1.0
+    loop_mode = len(sys.argv) > 4 and sys.argv[4].lower() == 'loop'
 
     print(f"TRC Playback - {trc_file}")
     print("=" * 60)
@@ -160,6 +163,9 @@ def main():
     else:
         print(f"  Playback speed: MAX (as fast as possible)")
 
+    if loop_mode:
+        print(f"  Loop mode: ON (Ctrl+C to stop)")
+
     print("=" * 60)
 
     # Open serial
@@ -175,48 +181,70 @@ def main():
     print("\nInitializing adapter...")
     slcan_init(ser, 500000)
 
-    print(f"\nPlaying back {len(frames)} frames in {len(grouped)} time slots...")
+    if loop_mode:
+        print(f"\nPlaying back {len(frames)} frames in loop mode...")
+    else:
+        print(f"\nPlaying back {len(frames)} frames in {len(grouped)} time slots...")
     print("Start your receiver now!\n")
     time.sleep(2)
 
     sent = 0
     errors = 0
+    loop_count = 0
     playback_start = time.time()
     trace_start_ms = grouped[0][0]
 
-    for slot_idx, (slot_time_ms, slot_frames) in enumerate(grouped):
-        # Calculate when this slot should be sent (relative to trace start)
-        relative_time_ms = slot_time_ms - trace_start_ms
+    try:
+        while True:
+            loop_start = time.time()
+            loop_count += 1
 
-        if speed_mult > 0:
-            # Wait until it's time to send this slot
-            target_time = playback_start + (relative_time_ms / 1000.0) / speed_mult
-            now = time.time()
-            if target_time > now:
-                time.sleep(target_time - now)
+            for slot_idx, (slot_time_ms, slot_frames) in enumerate(grouped):
+                # Calculate when this slot should be sent (relative to trace start)
+                relative_time_ms = slot_time_ms - trace_start_ms
 
-        # Send all frames in this slot with minimal delay to prevent TX overflow
-        for can_id, data in slot_frames:
-            slcan_send(ser, can_id, data)
-            sent += 1
-            # At 500kbps, an 8-byte frame takes ~0.23ms on wire
-            # Give STM32 time to queue frame before next one
-            if len(slot_frames) > 1:
-                time.sleep(0.0003)  # 0.3ms between frames in burst
+                if speed_mult > 0:
+                    # Wait until it's time to send this slot
+                    target_time = loop_start + (relative_time_ms / 1000.0) / speed_mult
+                    now = time.time()
+                    if target_time > now:
+                        time.sleep(target_time - now)
 
-        # After sending the burst, flush and check for errors
-        ser.flush()
+                # Send all frames in this slot with minimal delay to prevent TX overflow
+                for can_id, data in slot_frames:
+                    slcan_send(ser, can_id, data)
+                    sent += 1
+                    # At 500kbps, an 8-byte frame takes ~0.23ms on wire
+                    # Give STM32 time to queue frame before next one
+                    if len(slot_frames) > 1:
+                        time.sleep(0.0003)  # 0.3ms between frames in burst
 
-        # Progress every 500 slots
-        if (slot_idx + 1) % 500 == 0:
-            # Check for errors
-            if ser.in_waiting > 0:
-                resp = ser.read(ser.in_waiting)
-                errors += resp.count(b'\x07')
+                # After sending the burst, flush and check for errors
+                ser.flush()
 
-            elapsed = time.time() - playback_start
-            pct = 100 * (slot_idx + 1) / len(grouped)
-            print(f"\r  {pct:.0f}% - Sent: {sent}, Errors: {errors}, Elapsed: {elapsed:.1f}s", end="", flush=True)
+                # Progress every 500 slots
+                if (slot_idx + 1) % 500 == 0:
+                    # Check for errors
+                    if ser.in_waiting > 0:
+                        resp = ser.read(ser.in_waiting)
+                        errors += resp.count(b'\x07')
+
+                    elapsed = time.time() - playback_start
+                    if loop_mode:
+                        print(f"\r  Loop {loop_count} - Sent: {sent}, Errors: {errors}, Elapsed: {elapsed:.1f}s", end="", flush=True)
+                    else:
+                        pct = 100 * (slot_idx + 1) / len(grouped)
+                        print(f"\r  {pct:.0f}% - Sent: {sent}, Errors: {errors}, Elapsed: {elapsed:.1f}s", end="", flush=True)
+
+            # End of one loop iteration
+            if not loop_mode:
+                break
+
+            # Small gap between loops
+            time.sleep(0.1)
+
+    except KeyboardInterrupt:
+        print("\n\nStopped by user.")
 
     elapsed = time.time() - playback_start
 
@@ -229,9 +257,10 @@ def main():
     slcan_close(ser)
     ser.close()
 
-    print(f"\n\n{'=' * 60}")
+    print(f"\n{'=' * 60}")
     print("PLAYBACK COMPLETE")
     print("=" * 60)
+    print(f"  Loops:          {loop_count}")
     print(f"  Frames sent:    {sent}")
     print(f"  TX errors:      {errors}")
     print(f"  Elapsed time:   {elapsed:.1f}s")
