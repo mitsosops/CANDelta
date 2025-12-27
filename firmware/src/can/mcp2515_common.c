@@ -64,6 +64,41 @@ void mcp2515_parse_rx_buffer(const uint8_t *buf, can_frame_t *frame) {
     }
 }
 
+int mcp2515_drain_rx_locked(can_frame_t *frames, int max_frames) {
+    int count = 0;
+    uint8_t buf[13];
+
+    while (count < max_frames) {
+        uint8_t status = spi_read_status_raw();
+        uint8_t rx_flags = status & 0x03;
+
+        if (rx_flags == 0) break;  // No more frames pending
+
+        // Read RXB0 if has data
+        if (rx_flags & 0x01) {
+            mcp2515_read_rxb(MCP_READ_RX0, buf);
+            mcp2515_parse_rx_buffer(buf, &frames[count]);
+            frames[count].timestamp_us = time_us_64();
+            mcp2515_stats.rx_frames++;
+            if (mcp2515_rx_callback) mcp2515_rx_callback(&frames[count]);
+            count++;
+            if (count >= max_frames) break;
+        }
+
+        // Read RXB1 if has data
+        if (count < max_frames && (rx_flags & 0x02)) {
+            mcp2515_read_rxb(MCP_READ_RX1, buf);
+            mcp2515_parse_rx_buffer(buf, &frames[count]);
+            frames[count].timestamp_us = time_us_64();
+            mcp2515_stats.rx_frames++;
+            if (mcp2515_rx_callback) mcp2515_rx_callback(&frames[count]);
+            count++;
+        }
+    }
+
+    return count;
+}
+
 // ============================================================================
 // Initialization
 // ============================================================================
