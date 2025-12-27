@@ -1,5 +1,4 @@
 using Avalonia;
-using CANDelta.App;
 
 namespace CANDelta.Desktop;
 
@@ -10,8 +9,7 @@ class Program
         .StartWithClassicDesktopLifetime(args);
 
     public static AppBuilder BuildAvaloniaApp()
-        => AppBuilder.Configure<App>()
+        => AppBuilder.Configure<CANDelta.App.App>()
             .UsePlatformDetect()
-            .WithInterFont()
             .LogToTrace();
 }

@@ -1,6 +1,7 @@
 using CANDelta.Core.Analysis;
 using CANDelta.Core.Models;
 using CANDelta.Core.Protocol;
+using Xunit;
 
 namespace CANDelta.Core.Tests;
 

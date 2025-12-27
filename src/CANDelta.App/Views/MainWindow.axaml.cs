@@ -1,15 +1,15 @@
 using Avalonia.Controls;
 using Avalonia.Data.Converters;
 using Avalonia.Media;
-using System.Globalization;
 
-namespace CANDelta.App.Views;
-
-public partial class MainWindow : Window
+namespace CANDelta.App.Views
 {
-    public MainWindow()
+    public partial class MainWindow : Window
     {
-        InitializeComponent();
+        public MainWindow()
+        {
+            InitializeComponent();
+        }
     }
 }
 

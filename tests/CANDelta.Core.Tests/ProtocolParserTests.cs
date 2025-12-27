@@ -1,4 +1,5 @@
 using CANDelta.Core.Protocol;
+using Xunit;
 
 namespace CANDelta.Core.Tests;
 
@@ -46,11 +47,13 @@ public class ProtocolParserTests
         CanFrame? receivedFrame = null;
         parser.FrameReceived += f => receivedFrame = f;
 
-        // Build a CAN frame packet:
-        // STX + timestamp(8) + id(4) + flags(1) + dlc(1) + data(dlc) + ETX
+        // Build a CAN frame packet per protocol:
+        // STX + code(0x84) + length + timestamp(8) + id(4) + flags(1) + dlc(1) + data(dlc) + ETX
         var packet = new byte[]
         {
             0x02, // STX
+            0x84, // CAN_FRAME response code
+            0x10, // length = 16 (8+4+1+1+2)
             0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, // timestamp = 0x0100000000000000
             0x23, 0x01, 0x00, 0x00, // id = 0x123
             0x00, // flags (standard, not RTR)

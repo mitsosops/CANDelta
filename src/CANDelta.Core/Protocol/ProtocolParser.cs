@@ -9,7 +9,10 @@ public class ProtocolParser
     private const byte Etx = 0x03;
 
     private readonly List<byte> _buffer = new();
-    private bool _inPacket = false;
+    private enum ParseState { WaitingForStx, WaitingForOpcode, WaitingForLength, ReadingPayload, WaitingForEtx }
+    private ParseState _state = ParseState.WaitingForStx;
+    private int _payloadLength;
+    private int _payloadRead;
 
     /// <summary>
     /// Event raised when a CAN frame is received.
@@ -34,36 +37,61 @@ public class ProtocolParser
 
     private void ProcessByte(byte b)
     {
-        if (b == Stx)
+        switch (_state)
         {
-            _buffer.Clear();
-            _inPacket = true;
-            return;
-        }
+            case ParseState.WaitingForStx:
+                if (b == Stx)
+                {
+                    _buffer.Clear();
+                    _state = ParseState.WaitingForOpcode;
+                }
+                break;
 
-        if (b == Etx && _inPacket)
-        {
-            _inPacket = false;
-            ProcessPacket(_buffer.ToArray());
-            _buffer.Clear();
-            return;
-        }
+            case ParseState.WaitingForOpcode:
+                _buffer.Add(b);
+                _state = ParseState.WaitingForLength;
+                break;
 
-        if (_inPacket)
-        {
-            _buffer.Add(b);
+            case ParseState.WaitingForLength:
+                _buffer.Add(b);
+                _payloadLength = b;
+                _payloadRead = 0;
+                _state = _payloadLength > 0 ? ParseState.ReadingPayload : ParseState.WaitingForEtx;
+                break;
+
+            case ParseState.ReadingPayload:
+                _buffer.Add(b);
+                _payloadRead++;
+                if (_payloadRead >= _payloadLength)
+                {
+                    _state = ParseState.WaitingForEtx;
+                }
+                break;
+
+            case ParseState.WaitingForEtx:
+                if (b == Etx)
+                {
+                    ProcessPacket(_buffer.ToArray());
+                }
+                // Reset state regardless (handles framing errors by resyncing)
+                _buffer.Clear();
+                _state = ParseState.WaitingForStx;
+                break;
         }
     }
 
     private void ProcessPacket(byte[] data)
     {
-        if (data.Length == 0) return;
+        if (data.Length < 2) return;
 
-        // Check if this is a CAN frame (starts with timestamp, not response code)
-        if (data.Length >= 15 && data[0] < 0x80)
+        var code = (ResponseCode)data[0];
+        var len = data[1];
+        var payload = data.Length > 2 ? data[2..Math.Min(2 + len, data.Length)] : Array.Empty<byte>();
+
+        // CAN frame responses get special handling
+        if (code == ResponseCode.CanFrame)
         {
-            // CAN frame format: [timestamp:8][id:4][flags:1][dlc:1][data:0-8]
-            var frame = ParseCanFrame(data);
+            var frame = ParseCanFrame(payload);
             if (frame.HasValue)
             {
                 FrameReceived?.Invoke(frame.Value);
@@ -71,14 +99,8 @@ public class ProtocolParser
             return;
         }
 
-        // Response format: [code:1][len:1][data:N]
-        if (data.Length >= 2)
-        {
-            var code = (ResponseCode)data[0];
-            var len = data[1];
-            var payload = data.Length > 2 ? data[2..Math.Min(2 + len, data.Length)] : Array.Empty<byte>();
-            ResponseReceived?.Invoke(code, payload);
-        }
+        // All other responses
+        ResponseReceived?.Invoke(code, payload);
     }
 
     private static CanFrame? ParseCanFrame(byte[] data)
