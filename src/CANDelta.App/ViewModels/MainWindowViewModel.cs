@@ -65,7 +65,7 @@ public partial class MainWindowViewModel : ObservableObject
     private int _framesPerSecond;
 
     [ObservableProperty]
-    private ColorTheme _selectedTheme = ColorTheme.AvailableThemes[0]; // Cyan
+    private ColorTheme _selectedTheme = LoadSavedTheme();
 
     [ObservableProperty]
     private bool _showDriverInstallPrompt;
@@ -269,7 +269,26 @@ public partial class MainWindowViewModel : ObservableObject
                 ? $"Connected - Firmware {version}"
                 : "Connected";
 
-            await _serialService.SetSpeedAsync(SelectedSpeed);
+            // Query device status and sync UI controls
+            var status = await _serialService.GetStatusAsync();
+            if (status != null)
+            {
+                // Sync CAN speed with device
+                if (Enum.IsDefined(typeof(CanSpeed), status.Speed))
+                {
+                    SelectedSpeed = status.Speed;
+                }
+
+                // Sync capture state with device
+                IsCapturing = status.CaptureActive;
+
+                if (status.CaptureActive)
+                {
+                    StatusMessage = version != null
+                        ? $"Connected - Firmware {version} (Capturing)"
+                        : "Connected (Capturing)";
+                }
+            }
         }
         else
         {
@@ -419,6 +438,21 @@ public partial class MainWindowViewModel : ObservableObject
         {
             item.ApplyFade(0, color); // Just reapply colors without fading
         }
+
+        // Persist theme selection
+        AppSettings.SelectedThemeName = value.Name;
+    }
+
+    private static ColorTheme LoadSavedTheme()
+    {
+        var savedName = AppSettings.SelectedThemeName;
+        if (!string.IsNullOrEmpty(savedName))
+        {
+            var theme = ColorTheme.AvailableThemes.FirstOrDefault(t =>
+                t.Name.Equals(savedName, StringComparison.OrdinalIgnoreCase));
+            if (theme != null) return theme;
+        }
+        return ColorTheme.AvailableThemes[0]; // Default to Cyan
     }
 
     private void OnConnectionChanged(bool connected)

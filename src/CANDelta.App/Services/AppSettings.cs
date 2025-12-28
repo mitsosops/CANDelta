@@ -29,6 +29,20 @@ public static class AppSettings
         }
     }
 
+    /// <summary>
+    /// Gets or sets the selected color theme name.
+    /// </summary>
+    public static string? SelectedThemeName
+    {
+        get => Load().SelectedThemeName;
+        set
+        {
+            var settings = Load();
+            settings.SelectedThemeName = value;
+            Save(settings);
+        }
+    }
+
     private static Settings Load()
     {
         if (_cached != null) return _cached;
@@ -74,5 +88,6 @@ public static class AppSettings
     private class Settings
     {
         public bool DriverPromptDismissed { get; set; }
+        public string? SelectedThemeName { get; set; }
     }
 }
