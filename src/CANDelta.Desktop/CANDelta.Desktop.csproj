@@ -6,6 +6,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <RootNamespace>CANDelta.Desktop</RootNamespace>
+    <ApplicationIcon>candelta.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>

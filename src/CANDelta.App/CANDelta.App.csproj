@@ -7,6 +7,11 @@
     <RootNamespace>CANDelta.App</RootNamespace>
   </PropertyGroup>
 
+  <!-- App icons as Avalonia resources -->
+  <ItemGroup>
+    <AvaloniaResource Include="Assets\*.png" />
+  </ItemGroup>
+
   <ItemGroup>
     <PackageReference Include="Avalonia" Version="11.2.3" />
     <PackageReference Include="Avalonia.Themes.Fluent" Version="11.2.3" />
