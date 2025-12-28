@@ -1,6 +1,7 @@
 using Avalonia.Controls;
 using Avalonia.Data.Converters;
 using Avalonia.Media;
+using CANDelta.Core.Protocol;
 
 namespace CANDelta.App.Views
 {
@@ -36,6 +37,16 @@ namespace CANDelta.App.ViewModels
                 >= 100 => Brushes.Yellow,
                 > 0 => Brushes.Orange,
                 _ => Brushes.Gray
+            });
+
+        public static FuncValueConverter<CanSpeed, string> SpeedDisplayConverter { get; } =
+            new(speed => speed switch
+            {
+                CanSpeed.Speed125Kbps => "125 Kbps",
+                CanSpeed.Speed250Kbps => "250 Kbps",
+                CanSpeed.Speed500Kbps => "500 Kbps",
+                CanSpeed.Speed1Mbps => "1 Mbps",
+                _ => speed.ToString()
             });
     }
 }

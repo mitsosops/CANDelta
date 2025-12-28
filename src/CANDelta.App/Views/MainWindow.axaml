@@ -29,8 +29,14 @@
                 <TextBlock Text="Speed:" VerticalAlignment="Center"/>
                 <ComboBox ItemsSource="{Binding AvailableSpeeds}"
                           SelectedItem="{Binding SelectedSpeed}"
-                          Width="120"
-                          IsEnabled="{Binding !IsCapturing}"/>
+                          Width="100"
+                          IsEnabled="{Binding !IsCapturing}">
+                    <ComboBox.ItemTemplate>
+                        <DataTemplate>
+                            <TextBlock Text="{Binding Converter={x:Static vm:MainWindowViewModel.SpeedDisplayConverter}}"/>
+                        </DataTemplate>
+                    </ComboBox.ItemTemplate>
+                </ComboBox>
 
                 <Separator/>
 
