@@ -4,11 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-CANDelta is a CAN bus delta analyzer for reverse engineering vehicle networks. It consists of:
+CANDelta is a real-time CAN bus monitor for reverse engineering vehicle networks. It consists of:
 - **Firmware** (C): RP2040-based CAN analyzer using Pico SDK
 - **Desktop App** (C#): Cross-platform Avalonia UI application
 
-The workflow: capture multiple CAN traces for a "control" behaviour and a "test" behaviour, then compute the delta to isolate frames unique to the test behaviour.
+The Monitor view displays one row per unique CAN ID with 8 data bytes. Each byte has color-coded highlighting that flashes on value changes and fades back to idle, helping identify active signals during reverse engineering.
 
 ## Project Structure
 
@@ -47,7 +47,10 @@ CANDelta/
 │   ├── CANDelta.App/               # Avalonia UI application
 │   │   ├── App.axaml(.cs)
 │   │   ├── ViewModels/
-│   │   │   └── MainWindowViewModel.cs
+│   │   │   ├── MainWindowViewModel.cs
+│   │   │   ├── MonitoredByte.cs    # Per-byte value tracking and color animation
+│   │   │   ├── MonitoredCanId.cs   # Row model with 8 bytes
+│   │   │   └── ColorTheme.cs       # Theme presets for highlighting
 │   │   ├── Views/
 │   │   │   └── MainWindow.axaml(.cs)
 │   │   └── Services/
@@ -120,8 +123,11 @@ Pin assignments in `include/candelta_config.h` match Adafruit Feather RP2040 CAN
 
 **CANDelta.App** - Avalonia UI (MVVM with CommunityToolkit.Mvvm)
 - `Services/SerialService.cs` - USB CDC communication with async command/response
-- `ViewModels/MainWindowViewModel.cs` - Main application logic
-- `Views/` - AXAML views
+- `ViewModels/MainWindowViewModel.cs` - Monitor logic with frame batching and animations
+- `ViewModels/MonitoredByte.cs` - Per-byte value/min/max tracking and color transitions
+- `ViewModels/MonitoredCanId.cs` - Row model with 8 MonitoredByte instances
+- `ViewModels/ColorTheme.cs` - Selectable themes (Cyan, Orange, Lime, etc.)
+- `Views/` - AXAML views with ItemsControl and VirtualizingStackPanel
 
 **CANDelta.Desktop** - Entry point for Windows/Linux/macOS
 
@@ -131,10 +137,13 @@ Binary protocol over USB CDC. See `docs/protocol.md` for full specification.
 - Commands: PING, START_CAPTURE, STOP_CAPTURE, SET_SPEED, etc.
 - CAN frames streamed async with 64-bit microsecond timestamps
 
-### Delta Analysis Algorithm
-1. Build signature map for each behaviour (CAN ID or ID+data pattern)
-2. Filter by noise threshold (frame must appear in N% of traces)
-3. Delta = signatures in test but not in control
+### Monitor Architecture
+The app uses high-performance patterns for real-time visualization:
+1. **Frame batching**: ConcurrentQueue receives frames from serial thread, UI dequeues in batches (100/tick)
+2. **Dirty tracking**: HashSet tracks IDs with active animations, only those get fade updates
+3. **Brush mutation**: Existing SolidColorBrush colors are mutated instead of creating new instances
+4. **Binary insertion**: New CAN IDs inserted in sorted order with O(log n) binary search
+5. **Color intensity**: Per-byte min/max tracking; change intensity = delta / range
 
 ## Key Patterns
 

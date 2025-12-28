@@ -1,9 +1,9 @@
+using System.Collections.Concurrent;
 using System.Collections.ObjectModel;
+using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using CANDelta.App.Services;
-using CANDelta.Core.Analysis;
-using CANDelta.Core.Models;
 using CANDelta.Core.Protocol;
 
 namespace CANDelta.App.ViewModels;
@@ -11,11 +11,26 @@ namespace CANDelta.App.ViewModels;
 public partial class MainWindowViewModel : ObservableObject
 {
     private readonly ISerialService _serialService;
-    private readonly DeltaAnalyzer _analyzer = new();
-    private Trace? _currentTrace;
+
+    // Frame processing
+    private readonly ConcurrentQueue<CanFrame> _pendingFrames = new();
+    private readonly Dictionary<uint, MonitoredCanId> _monitoredIdsLookup = new();
+    private readonly HashSet<MonitoredCanId> _activeAnimations = new();
+
+    // Timers
+    private DispatcherTimer? _batchUpdateTimer;
+    private DispatcherTimer? _fadeTimer;
+
+    // FPS tracking
+    private int _framesThisSecond;
+    private DateTime _lastFpsUpdate = DateTime.UtcNow;
+
+    // Constants
+    private const int BatchSize = 100;
+    private const double FadePerTick = 0.04; // ~1.5s fade at 60fps (90 ticks * 0.04 ≈ 3.6, but intensity starts < 1)
 
     [ObservableProperty]
-    private string _title = "CANDelta - CAN Bus Analyzer";
+    private string _title = "CANDelta - CAN Bus Monitor";
 
     [ObservableProperty]
     private bool _isConnected;
@@ -36,20 +51,19 @@ public partial class MainWindowViewModel : ObservableObject
     private int _frameCount;
 
     [ObservableProperty]
-    private Behaviour? _controlBehaviour;
+    private int _uniqueIdCount;
 
     [ObservableProperty]
-    private Behaviour? _testBehaviour;
+    private int _framesPerSecond;
 
     [ObservableProperty]
-    private DeltaResult? _deltaResult;
+    private ColorTheme _selectedTheme = ColorTheme.AvailableThemes[0]; // Cyan
 
     public ObservableCollection<string> AvailablePorts { get; } = new();
-    public ObservableCollection<CanFrame> LiveFrames { get; } = new();
-    public ObservableCollection<Behaviour> Behaviours { get; } = new();
-    public ObservableCollection<DeltaFrame> DeltaFrames { get; } = new();
+    public ObservableCollection<MonitoredCanId> MonitoredIds { get; } = new();
 
     public IEnumerable<CanSpeed> AvailableSpeeds { get; } = Enum.GetValues<CanSpeed>();
+    public ColorTheme[] AvailableThemes { get; } = ColorTheme.AvailableThemes;
 
     public MainWindowViewModel(ISerialService serialService)
     {
@@ -58,7 +72,27 @@ public partial class MainWindowViewModel : ObservableObject
         _serialService.ConnectionChanged += OnConnectionChanged;
         _serialService.ErrorOccurred += OnError;
 
+        InitializeTimers();
         RefreshPorts();
+    }
+
+    private void InitializeTimers()
+    {
+        // Batch update timer: process queued frames at 60fps
+        _batchUpdateTimer = new DispatcherTimer
+        {
+            Interval = TimeSpan.FromMilliseconds(16)
+        };
+        _batchUpdateTimer.Tick += OnBatchUpdateTick;
+        _batchUpdateTimer.Start();
+
+        // Fade timer: animate color fade-back at 60fps
+        _fadeTimer = new DispatcherTimer
+        {
+            Interval = TimeSpan.FromMilliseconds(16)
+        };
+        _fadeTimer.Tick += OnFadeTimerTick;
+        _fadeTimer.Start();
     }
 
     [RelayCommand]
@@ -117,20 +151,10 @@ public partial class MainWindowViewModel : ObservableObject
         {
             await _serialService.StopCaptureAsync();
             IsCapturing = false;
-            StatusMessage = "Capture stopped";
-
-            if (_currentTrace != null)
-            {
-                _currentTrace.EndTime = DateTime.UtcNow;
-            }
+            StatusMessage = $"Capture stopped - {UniqueIdCount} IDs, {FrameCount} frames";
         }
         else
         {
-            LiveFrames.Clear();
-            FrameCount = 0;
-
-            _currentTrace = new Trace { Speed = SelectedSpeed };
-
             if (await _serialService.StartCaptureAsync())
             {
                 IsCapturing = true;
@@ -140,89 +164,122 @@ public partial class MainWindowViewModel : ObservableObject
     }
 
     [RelayCommand]
-    private void SaveTraceToControl()
+    private void ClearMonitor()
     {
-        if (_currentTrace == null || _currentTrace.Frames.Count == 0) return;
+        // Clear pending frames
+        while (_pendingFrames.TryDequeue(out _)) { }
 
-        ControlBehaviour ??= new Behaviour { Name = "Control", IsControl = true };
-        ControlBehaviour.Traces.Add(_currentTrace);
+        // Clear tracked IDs
+        _monitoredIdsLookup.Clear();
+        _activeAnimations.Clear();
+        MonitoredIds.Clear();
 
-        StatusMessage = $"Saved trace to Control ({ControlBehaviour.Traces.Count} traces, {_currentTrace.Frames.Count} frames)";
-        _currentTrace = null;
-    }
-
-    [RelayCommand]
-    private void SaveTraceToTest()
-    {
-        if (_currentTrace == null || _currentTrace.Frames.Count == 0) return;
-
-        TestBehaviour ??= new Behaviour { Name = "Test", IsControl = false };
-        TestBehaviour.Traces.Add(_currentTrace);
-
-        StatusMessage = $"Saved trace to Test ({TestBehaviour.Traces.Count} traces, {_currentTrace.Frames.Count} frames)";
-        _currentTrace = null;
-    }
-
-    [RelayCommand]
-    private void AnalyzeDelta()
-    {
-        if (ControlBehaviour == null || TestBehaviour == null)
-        {
-            StatusMessage = "Need both Control and Test behaviours";
-            return;
-        }
-
-        if (ControlBehaviour.Traces.Count == 0 || TestBehaviour.Traces.Count == 0)
-        {
-            StatusMessage = "Need at least one trace in each behaviour";
-            return;
-        }
-
-        DeltaResult = _analyzer.Analyze(ControlBehaviour, TestBehaviour);
-
-        DeltaFrames.Clear();
-        foreach (var frame in DeltaResult.UniqueToTest)
-        {
-            DeltaFrames.Add(frame);
-        }
-
-        StatusMessage = DeltaResult.Summary;
-    }
-
-    [RelayCommand]
-    private void ClearAll()
-    {
-        ControlBehaviour = null;
-        TestBehaviour = null;
-        DeltaResult = null;
-        DeltaFrames.Clear();
-        LiveFrames.Clear();
+        // Reset counters
         FrameCount = 0;
-        _currentTrace = null;
-        StatusMessage = "Cleared all data";
+        UniqueIdCount = 0;
+        FramesPerSecond = 0;
+        _framesThisSecond = 0;
+
+        StatusMessage = "Monitor cleared";
     }
 
     private void OnFrameReceived(CanFrame frame)
     {
-        // Must dispatch to UI thread
-        Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+        // Thread-safe enqueue (called from serial thread)
+        _pendingFrames.Enqueue(frame);
+    }
+
+    private void OnBatchUpdateTick(object? sender, EventArgs e)
+    {
+        // Process up to BatchSize frames per tick
+        int processed = 0;
+        var themeColor = SelectedTheme.AlertColor;
+
+        while (processed < BatchSize && _pendingFrames.TryDequeue(out var frame))
         {
-            LiveFrames.Add(frame);
-            FrameCount = LiveFrames.Count;
+            ProcessFrame(frame, themeColor);
+            processed++;
+        }
 
-            _currentTrace?.Frames.Add(frame);
+        // Update FPS counter
+        _framesThisSecond += processed;
+        var now = DateTime.UtcNow;
+        if ((now - _lastFpsUpdate).TotalSeconds >= 1.0)
+        {
+            FramesPerSecond = _framesThisSecond;
+            _framesThisSecond = 0;
+            _lastFpsUpdate = now;
+        }
+    }
 
-            // Keep only last 1000 frames in live view
-            while (LiveFrames.Count > 1000)
+    private void ProcessFrame(CanFrame frame, Avalonia.Media.Color themeColor)
+    {
+        FrameCount++;
+
+        // Look up or create monitored ID
+        if (!_monitoredIdsLookup.TryGetValue(frame.Id, out var monitoredId))
+        {
+            monitoredId = new MonitoredCanId(frame.Id, frame.IsExtended);
+            _monitoredIdsLookup[frame.Id] = monitoredId;
+            InsertSorted(monitoredId);
+            UniqueIdCount = MonitoredIds.Count;
+        }
+
+        // Update bytes and mark as animating
+        monitoredId.UpdateFromFrame(frame, themeColor);
+        _activeAnimations.Add(monitoredId);
+    }
+
+    private void InsertSorted(MonitoredCanId item)
+    {
+        // Binary search for insertion point
+        int lo = 0, hi = MonitoredIds.Count;
+        while (lo < hi)
+        {
+            int mid = (lo + hi) / 2;
+            if (MonitoredIds[mid].Id < item.Id)
+                lo = mid + 1;
+            else
+                hi = mid;
+        }
+        MonitoredIds.Insert(lo, item);
+    }
+
+    private void OnFadeTimerTick(object? sender, EventArgs e)
+    {
+        if (_activeAnimations.Count == 0) return;
+
+        var themeColor = SelectedTheme.AlertColor;
+        var toRemove = new List<MonitoredCanId>();
+
+        foreach (var item in _activeAnimations)
+        {
+            item.ApplyFade(FadePerTick, themeColor);
+            if (!item.HasActiveAnimation())
             {
-                LiveFrames.RemoveAt(0);
+                toRemove.Add(item);
             }
-        });
+        }
+
+        foreach (var item in toRemove)
+        {
+            _activeAnimations.Remove(item);
+        }
+    }
+
+    partial void OnSelectedThemeChanged(ColorTheme value)
+    {
+        // Reapply colors when theme changes
+        var color = value.AlertColor;
+        foreach (var item in _activeAnimations)
+        {
+            item.ApplyFade(0, color); // Just reapply colors without fading
+        }
     }
 
     private void OnConnectionChanged(bool connected)
     {
-        Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+        Dispatcher.UIThread.Post(() =>
         {
             IsConnected = connected;
             if (!connected)
@@ -235,7 +292,7 @@ public partial class MainWindowViewModel : ObservableObject
 
     private void OnError(string message)
     {
-        Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+        Dispatcher.UIThread.Post(() =>
         {
             StatusMessage = $"Error: {message}";
         });
