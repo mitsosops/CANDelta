@@ -31,6 +31,9 @@ public partial class MainWindowViewModel : ObservableObject
     // Track CANDelta detection state for auto-select
     private bool _hadCanDeltaDetected;
 
+    // Flag to prevent sending commands back when syncing UI from device state
+    private bool _syncingFromDevice;
+
     // Constants
     private const int BatchSize = 100;
     private const double FadePerTick = 0.04; // ~1.5s fade at 60fps (90 ticks * 0.04 ≈ 3.6, but intensity starts < 1)
@@ -273,14 +276,22 @@ public partial class MainWindowViewModel : ObservableObject
             var status = await _serialService.GetStatusAsync();
             if (status != null)
             {
-                // Sync CAN speed with device
-                if (Enum.IsDefined(typeof(CanSpeed), status.Speed))
+                _syncingFromDevice = true;
+                try
                 {
-                    SelectedSpeed = status.Speed;
-                }
+                    // Sync CAN speed with device
+                    if (Enum.IsDefined(typeof(CanSpeed), status.Speed))
+                    {
+                        SelectedSpeed = status.Speed;
+                    }
 
-                // Sync capture state with device
-                IsCapturing = status.CaptureActive;
+                    // Sync capture state with device
+                    IsCapturing = status.CaptureActive;
+                }
+                finally
+                {
+                    _syncingFromDevice = false;
+                }
 
                 if (status.CaptureActive)
                 {
@@ -427,6 +438,15 @@ public partial class MainWindowViewModel : ObservableObject
         foreach (var item in MonitoredIds)
         {
             item.UpdateGraphPoints(GraphWidth, GraphHeight);
+        }
+    }
+
+    partial void OnSelectedSpeedChanged(CanSpeed value)
+    {
+        // Send speed change to device if connected and not syncing from device
+        if (IsConnected && !_syncingFromDevice)
+        {
+            _ = _serialService.SetSpeedAsync(value);
         }
     }
 
