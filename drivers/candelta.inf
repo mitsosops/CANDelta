@@ -1,0 +1,57 @@
+; CANDelta CAN Analyzer USB CDC Driver
+; Copyright (c) CANDelta Project
+;
+; This INF file maps the CANDelta device (VID_2E8A&PID_CA1D) to the
+; Windows built-in USB serial driver (usbser.sys) with a friendly name.
+
+[Version]
+Signature   = "$Windows NT$"
+Class       = Ports
+ClassGuid   = {4D36E978-E325-11CE-BFC1-08002BE10318}
+Provider    = %ManufacturerName%
+CatalogFile = candelta.cat
+DriverVer   = 12/28/2025,1.0.0.0
+PnpLockdown = 1
+
+[Manufacturer]
+%ManufacturerName% = DeviceList, NTamd64, NTarm64
+
+[DeviceList.NTamd64]
+%DeviceName% = CANDelta_Install, USB\VID_2E8A&PID_CA1D
+%DeviceName% = CANDelta_Install, USB\VID_2E8A&PID_CA1D&MI_00
+
+[DeviceList.NTarm64]
+%DeviceName% = CANDelta_Install, USB\VID_2E8A&PID_CA1D
+%DeviceName% = CANDelta_Install, USB\VID_2E8A&PID_CA1D&MI_00
+
+[CANDelta_Install]
+Include   = mdmcpq.inf,usb.inf
+CopyFiles = FakeModemCopyFileSection
+AddReg    = CANDelta_AddReg
+
+[CANDelta_Install.Services]
+Include = mdmcpq.inf
+AddService = usbser, 0x00000002, CANDelta_Service_Install
+
+[CANDelta_Service_Install]
+DisplayName   = %ServiceName%
+ServiceType   = 1
+StartType     = 3
+ErrorControl  = 1
+ServiceBinary = %12%\usbser.sys
+
+[CANDelta_AddReg]
+HKR,,DevLoader,,*ntkern
+HKR,,NTMPDriver,,usbser.sys
+HKR,,EnumPropPages32,,"MsPorts.dll,SerialPortPropPageProvider"
+
+[CANDelta_Install.HW]
+AddReg = CANDelta_HW_AddReg
+
+[CANDelta_HW_AddReg]
+HKR,,FriendlyName,,%DeviceName%
+
+[Strings]
+ManufacturerName = "CANDelta"
+DeviceName       = "CANDelta CAN Analyzer"
+ServiceName      = "USB Serial Driver"

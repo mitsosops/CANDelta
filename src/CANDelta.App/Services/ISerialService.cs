@@ -28,9 +28,9 @@ public interface ISerialService : IDisposable
     bool IsConnected { get; }
 
     /// <summary>
-    /// Get list of available COM ports.
+    /// Get list of available COM ports with USB device information.
     /// </summary>
-    string[] GetAvailablePorts();
+    DetectedPort[] GetAvailablePorts();
 
     /// <summary>
     /// Connect to the device on the specified port.

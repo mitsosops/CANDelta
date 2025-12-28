@@ -67,10 +67,13 @@ function(configure_candelta_target TARGET_NAME RX_SOURCE USE_IRQ)
     pico_enable_stdio_usb(${TARGET_NAME} 1)
     pico_enable_stdio_uart(${TARGET_NAME} 0)
 
-    # USB product/manufacturer strings
+    # USB descriptors - custom PID for unique device identification
+    # VID 0x2E8A = Raspberry Pi Foundation (community use allowed)
+    # PID 0xCA1D = Custom PID for CANDelta ("CA1D" ≈ "CANID")
     target_compile_definitions(${TARGET_NAME} PRIVATE
         USBD_MANUFACTURER="CANDelta"
         USBD_PRODUCT="CANDelta CAN Analyzer"
+        USBD_PID=0xCA1D
     )
 
     # Add IRQ mode define if needed

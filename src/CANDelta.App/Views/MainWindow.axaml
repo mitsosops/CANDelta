@@ -2,24 +2,54 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vm="using:CANDelta.App.ViewModels"
         xmlns:controls="using:CANDelta.App.Controls"
+        xmlns:services="using:CANDelta.App.Services"
         x:Class="CANDelta.App.Views.MainWindow"
         x:DataType="vm:MainWindowViewModel"
         Title="{Binding Title}"
         Width="1200" Height="700"
         WindowStartupLocation="CenterScreen">
 
-    <Grid RowDefinitions="Auto,Auto,*,Auto">
+    <Grid RowDefinitions="Auto,Auto,Auto,*,Auto">
+        <!-- Driver Installation Banner (Optional) -->
+        <Border Grid.Row="0"
+                Background="#E7F3FF"
+                Padding="12,8"
+                IsVisible="{Binding ShowDriverInstallPrompt}">
+            <Grid ColumnDefinitions="*,Auto,Auto">
+                <TextBlock Grid.Column="0"
+                           Text="CANDelta detected! Optional: Install driver to show device name in Device Manager (cosmetic only)."
+                           VerticalAlignment="Center"
+                           Foreground="#004085"/>
+                <Button Grid.Column="1"
+                        Content="Install Driver"
+                        Command="{Binding InstallDriverCommand}"
+                        Margin="8,0"
+                        Background="#0066CC"
+                        Foreground="White"
+                        Padding="12,6"/>
+                <Button Grid.Column="2"
+                        Content="Skip"
+                        Command="{Binding DismissDriverPromptCommand}"
+                        Background="#6C757D"
+                        Foreground="White"
+                        Padding="12,6"/>
+            </Grid>
+        </Border>
+
         <!-- Toolbar Row 1: Connection & Capture -->
-        <Border Grid.Row="0" Background="{DynamicResource SystemControlBackgroundChromeMediumBrush}" Padding="8">
+        <Border Grid.Row="1" Background="{DynamicResource SystemControlBackgroundChromeMediumBrush}" Padding="8">
             <StackPanel Orientation="Horizontal" Spacing="8">
                 <!-- Connection -->
                 <ComboBox ItemsSource="{Binding AvailablePorts}"
                           SelectedItem="{Binding SelectedPort}"
-                          Width="120"
-                          IsEnabled="{Binding !IsConnected}"/>
-                <Button Command="{Binding RefreshPortsCommand}"
-                        Content="Refresh"
-                        IsEnabled="{Binding !IsConnected}"/>
+                          Width="180"
+                          IsEnabled="{Binding !IsConnected}">
+                    <ComboBox.ItemTemplate>
+                        <DataTemplate x:DataType="services:DetectedPort">
+                            <TextBlock Text="{Binding DisplayName}"/>
+                        </DataTemplate>
+                    </ComboBox.ItemTemplate>
+                </ComboBox>
                 <Button Command="{Binding ConnectCommand}">
                     <TextBlock Text="{Binding IsConnected, Converter={x:Static vm:MainWindowViewModel.ConnectButtonConverter}}"/>
                 </Button>
@@ -54,34 +84,41 @@
         </Border>
 
         <!-- Toolbar Row 2: Theme & Clear -->
-        <Border Grid.Row="1" Background="{DynamicResource SystemControlBackgroundChromeMediumBrush}"
+        <Border Grid.Row="2" Background="{DynamicResource SystemControlBackgroundChromeMediumBrush}"
                 Padding="8,4" BorderThickness="0,1,0,0" BorderBrush="{DynamicResource SystemControlForegroundBaseMediumBrush}">
-            <StackPanel Orientation="Horizontal" Spacing="8">
-                <TextBlock Text="Theme:" VerticalAlignment="Center"/>
-                <ComboBox ItemsSource="{Binding AvailableThemes}"
-                          SelectedItem="{Binding SelectedTheme}"
-                          Width="100">
-                    <ComboBox.ItemTemplate>
-                        <DataTemplate x:DataType="vm:ColorTheme">
-                            <StackPanel Orientation="Horizontal" Spacing="6">
-                                <Rectangle Width="12" Height="12"
-                                           Fill="{Binding AlertColor, Converter={x:Static vm:MainWindowViewModel.ColorToBrushConverter}}"
-                                           RadiusX="2" RadiusY="2"/>
-                                <TextBlock Text="{Binding Name}"/>
-                            </StackPanel>
-                        </DataTemplate>
-                    </ComboBox.ItemTemplate>
-                </ComboBox>
+            <Grid ColumnDefinitions="Auto,*,Auto">
+                <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="8">
+                    <TextBlock Text="Theme:" VerticalAlignment="Center"/>
+                    <ComboBox ItemsSource="{Binding AvailableThemes}"
+                              SelectedItem="{Binding SelectedTheme}"
+                              Width="100">
+                        <ComboBox.ItemTemplate>
+                            <DataTemplate x:DataType="vm:ColorTheme">
+                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                    <Rectangle Width="12" Height="12"
+                                               Fill="{Binding AlertColor, Converter={x:Static vm:MainWindowViewModel.ColorToBrushConverter}}"
+                                               RadiusX="2" RadiusY="2"/>
+                                    <TextBlock Text="{Binding Name}"/>
+                                </StackPanel>
+                            </DataTemplate>
+                        </ComboBox.ItemTemplate>
+                    </ComboBox>
 
-                <Separator/>
+                    <Separator/>
 
-                <Button Command="{Binding ClearMonitorCommand}"
-                        Content="Clear"/>
-            </StackPanel>
+                    <Button Command="{Binding ClearMonitorCommand}"
+                            Content="Clear"/>
+                </StackPanel>
+
+                <Button Grid.Column="2"
+                        Command="{Binding InstallDriverManuallyCommand}"
+                        Content="Install Driver"
+                        ToolTip.Tip="Install USB driver for Device Manager identification (optional)"/>
+            </Grid>
         </Border>
 
         <!-- Main Content: CAN Monitor -->
-        <Border Grid.Row="2" Margin="8">
+        <Border Grid.Row="3" Margin="8">
             <Grid RowDefinitions="Auto,*">
                 <!-- Header -->
                 <Border Grid.Row="0" Background="{DynamicResource SystemControlBackgroundChromeMediumLowBrush}"
@@ -245,7 +282,7 @@
         </Border>
 
         <!-- Status Bar -->
-        <Border Grid.Row="3" Background="{DynamicResource SystemControlBackgroundChromeMediumBrush}" Padding="8,4">
+        <Border Grid.Row="4" Background="{DynamicResource SystemControlBackgroundChromeMediumBrush}" Padding="8,4">
             <Grid ColumnDefinitions="*,Auto,Auto,Auto,Auto,Auto,Auto">
                 <TextBlock Grid.Column="0" Text="{Binding StatusMessage}"/>
                 <Separator Grid.Column="1"/>

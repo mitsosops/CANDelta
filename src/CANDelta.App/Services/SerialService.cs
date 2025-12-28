@@ -1,4 +1,7 @@
 using System.IO.Ports;
+using System.Runtime.InteropServices;
+using System.Runtime.Versioning;
+using System.Text.RegularExpressions;
 using CANDelta.Core.Protocol;
 
 namespace CANDelta.App.Services;
@@ -26,9 +29,74 @@ public class SerialService : ISerialService
         _parser.ResponseReceived += OnResponseReceived;
     }
 
-    public string[] GetAvailablePorts()
+    public DetectedPort[] GetAvailablePorts()
     {
-        return SerialPort.GetPortNames();
+        var portNames = SerialPort.GetPortNames();
+
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+        {
+            return GetWindowsPortsWithUsbInfo(portNames);
+        }
+
+        // Fallback for non-Windows: return ports without USB info
+        return portNames.Select(p => new DetectedPort(p)).ToArray();
+    }
+
+    [SupportedOSPlatform("windows")]
+    private static DetectedPort[] GetWindowsPortsWithUsbInfo(string[] portNames)
+    {
+        var result = new List<DetectedPort>();
+        // Maps port name to (isCanDelta, needsDriverInstall)
+        var portInfo = new Dictionary<string, (bool isCanDelta, bool needsDriver)>(StringComparer.OrdinalIgnoreCase);
+
+        try
+        {
+            // Query WMI for USB serial devices
+            using var searcher = new System.Management.ManagementObjectSearcher(
+                "SELECT * FROM Win32_PnPEntity WHERE Caption LIKE '%(COM%'");
+
+            foreach (System.Management.ManagementObject obj in searcher.Get())
+            {
+                var caption = obj["Caption"]?.ToString();
+                var pnpDeviceId = obj["PNPDeviceID"]?.ToString();
+
+                if (string.IsNullOrEmpty(caption) || string.IsNullOrEmpty(pnpDeviceId)) continue;
+
+                // Extract COM port from caption (e.g., "USB Serial Device (COM7)")
+                var match = Regex.Match(caption, @"\((COM\d+)\)");
+                if (!match.Success) continue;
+
+                var portName = match.Groups[1].Value;
+
+                // Check if this is a CANDelta device by VID/PID
+                bool isCanDelta = pnpDeviceId.Contains(DetectedPort.CanDeltaVidPid, StringComparison.OrdinalIgnoreCase);
+
+                if (isCanDelta)
+                {
+                    // Check if driver is installed (caption shows "CANDelta" instead of "USB Serial Device")
+                    bool driverInstalled = caption.Contains("CANDelta", StringComparison.OrdinalIgnoreCase);
+                    portInfo[portName] = (true, !driverInstalled);
+                }
+            }
+        }
+        catch
+        {
+            // WMI query failed, fall back to simple port names
+        }
+
+        foreach (var portName in portNames.OrderBy(p => p))
+        {
+            if (portInfo.TryGetValue(portName, out var info))
+            {
+                result.Add(new DetectedPort(portName, info.isCanDelta, info.needsDriver));
+            }
+            else
+            {
+                result.Add(new DetectedPort(portName));
+            }
+        }
+
+        return result.ToArray();
     }
 
     public async Task<bool> ConnectAsync(string portName)

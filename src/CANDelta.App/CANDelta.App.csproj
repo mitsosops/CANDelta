@@ -12,10 +12,18 @@
     <PackageReference Include="Avalonia.Themes.Fluent" Version="11.2.3" />
     <PackageReference Include="Avalonia.Controls.DataGrid" Version="11.2.3" />
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.3.2" />
+    <PackageReference Include="System.Management" Version="8.0.0" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\CANDelta.Core\CANDelta.Core.csproj" />
+  </ItemGroup>
+
+  <!-- Copy driver INF file to output -->
+  <ItemGroup>
+    <None Include="..\..\drivers\candelta.inf" Link="drivers\candelta.inf">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
   </ItemGroup>
 
 </Project>

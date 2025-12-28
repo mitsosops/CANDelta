@@ -5,6 +5,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using CANDelta.App.Services;
 using CANDelta.Core.Protocol;
+using System.Linq;
 
 namespace CANDelta.App.ViewModels;
 
@@ -21,10 +22,14 @@ public partial class MainWindowViewModel : ObservableObject
     private DispatcherTimer? _batchUpdateTimer;
     private DispatcherTimer? _fadeTimer;
     private DispatcherTimer? _graphUpdateTimer;
+    private DispatcherTimer? _portPollTimer;
 
     // FPS tracking
     private int _framesThisSecond;
     private DateTime _lastFpsUpdate = DateTime.UtcNow;
+
+    // Track CANDelta detection state for auto-select
+    private bool _hadCanDeltaDetected;
 
     // Constants
     private const int BatchSize = 100;
@@ -42,7 +47,7 @@ public partial class MainWindowViewModel : ObservableObject
     private bool _isCapturing;
 
     [ObservableProperty]
-    private string _selectedPort = "";
+    private DetectedPort? _selectedPort;
 
     [ObservableProperty]
     private CanSpeed _selectedSpeed = CanSpeed.Speed500Kbps;
@@ -62,7 +67,13 @@ public partial class MainWindowViewModel : ObservableObject
     [ObservableProperty]
     private ColorTheme _selectedTheme = ColorTheme.AvailableThemes[0]; // Cyan
 
-    public ObservableCollection<string> AvailablePorts { get; } = new();
+    [ObservableProperty]
+    private bool _showDriverInstallPrompt;
+
+    [ObservableProperty]
+    private bool _isInstallingDriver;
+
+    public ObservableCollection<DetectedPort> AvailablePorts { get; } = new();
     public ObservableCollection<MonitoredCanId> MonitoredIds { get; } = new();
 
     public IEnumerable<CanSpeed> AvailableSpeeds { get; } = Enum.GetValues<CanSpeed>();
@@ -104,21 +115,134 @@ public partial class MainWindowViewModel : ObservableObject
         };
         _graphUpdateTimer.Tick += OnGraphUpdateTick;
         _graphUpdateTimer.Start();
+
+        // Port polling timer: check for new devices every 2 seconds
+        _portPollTimer = new DispatcherTimer
+        {
+            Interval = TimeSpan.FromSeconds(2)
+        };
+        _portPollTimer.Tick += (_, _) => RefreshPorts();
+        _portPollTimer.Start();
     }
 
     [RelayCommand]
     private void RefreshPorts()
     {
-        AvailablePorts.Clear();
-        foreach (var port in _serialService.GetAvailablePorts())
+        var currentPorts = _serialService.GetAvailablePorts();
+        var currentPortNames = new HashSet<string>(currentPorts.Select(p => p.PortName));
+        var existingPortNames = new HashSet<string>(AvailablePorts.Select(p => p.PortName));
+
+        // Check if CANDelta is now detected
+        var canDeltaPort = currentPorts.FirstOrDefault(p => p.IsCanDelta);
+        bool hasCanDeltaNow = canDeltaPort != null;
+
+        // Skip update if ports haven't changed (but still check for CANDelta transition)
+        bool portsChanged = !currentPortNames.SetEquals(existingPortNames);
+
+        if (portsChanged)
         {
-            AvailablePorts.Add(port);
+            // Remember current selection
+            var previousSelection = SelectedPort?.PortName;
+
+            AvailablePorts.Clear();
+            foreach (var port in currentPorts)
+            {
+                AvailablePorts.Add(port);
+            }
+
+            // Restore previous selection if still available
+            if (previousSelection != null)
+            {
+                var previousPort = AvailablePorts.FirstOrDefault(p => p.PortName == previousSelection);
+                if (previousPort != null)
+                {
+                    SelectedPort = previousPort;
+                }
+            }
+
+            // Select first available if nothing selected
+            if (SelectedPort == null && AvailablePorts.Count > 0)
+            {
+                SelectedPort = AvailablePorts[0];
+            }
         }
 
-        if (AvailablePorts.Count > 0 && string.IsNullOrEmpty(SelectedPort))
+        // Auto-select CANDelta when it transitions from undetected to detected
+        if (hasCanDeltaNow && !_hadCanDeltaDetected)
         {
-            SelectedPort = AvailablePorts[0];
+            // Find the CANDelta port in the current list
+            var canDeltaInList = AvailablePorts.FirstOrDefault(p => p.IsCanDelta);
+            if (canDeltaInList != null)
+            {
+                SelectedPort = canDeltaInList;
+            }
         }
+
+        _hadCanDeltaDetected = hasCanDeltaNow;
+
+        // Check if any CANDelta device needs driver installation (only prompt if not previously dismissed)
+        if (!AppSettings.DriverPromptDismissed && System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.Windows))
+        {
+            var needsDriver = currentPorts.FirstOrDefault(p => p.IsCanDelta && p.NeedsDriverInstall);
+            if (needsDriver != null)
+            {
+                ShowDriverInstallPrompt = true;
+            }
+        }
+    }
+
+    [RelayCommand]
+    private async Task InstallDriverAsync()
+    {
+        if (!System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.Windows))
+        {
+            return;
+        }
+
+        ShowDriverInstallPrompt = false;
+        IsInstallingDriver = true;
+        StatusMessage = "Installing driver...";
+
+        try
+        {
+            var result = await DriverInstaller.InstallDriverAsync();
+
+            if (result.Success)
+            {
+                StatusMessage = result.Message;
+                AppSettings.DriverPromptDismissed = true; // Don't prompt again after success
+                // Refresh ports to pick up the new driver
+                await Task.Delay(1000); // Give Windows time to re-enumerate
+                RefreshPorts();
+            }
+            else
+            {
+                // Show warning, not error - the app works fine without the driver
+                StatusMessage = "Driver not installed (optional). Device works normally but shows as 'USB Serial Device' in Device Manager.";
+                AppSettings.DriverPromptDismissed = true; // Don't prompt again after failure
+            }
+        }
+        finally
+        {
+            IsInstallingDriver = false;
+        }
+    }
+
+    [RelayCommand]
+    private void DismissDriverPrompt()
+    {
+        AppSettings.DriverPromptDismissed = true;
+        ShowDriverInstallPrompt = false;
+    }
+
+    /// <summary>
+    /// Manually trigger driver installation (for use from menu/settings).
+    /// </summary>
+    [RelayCommand]
+    private async Task InstallDriverManuallyAsync()
+    {
+        // Reset the dismissed flag to allow the install to proceed
+        await InstallDriverAsync();
     }
 
     [RelayCommand]
@@ -130,15 +254,15 @@ public partial class MainWindowViewModel : ObservableObject
             return;
         }
 
-        if (string.IsNullOrEmpty(SelectedPort))
+        if (SelectedPort == null)
         {
             StatusMessage = "Please select a COM port";
             return;
         }
 
-        StatusMessage = $"Connecting to {SelectedPort}...";
+        StatusMessage = $"Connecting to {SelectedPort.PortName}...";
 
-        if (await _serialService.ConnectAsync(SelectedPort))
+        if (await _serialService.ConnectAsync(SelectedPort.PortName))
         {
             var version = await _serialService.GetVersionAsync();
             StatusMessage = version != null
