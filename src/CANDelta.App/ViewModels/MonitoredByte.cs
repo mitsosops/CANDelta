@@ -17,7 +17,7 @@ public partial class MonitoredByte : ObservableObject
 
     // History settings
     private const int HistoryDurationMs = 5000; // 5 seconds
-    private const int MaxHistoryPoints = 150;   // Max points to keep (for performance)
+    private const int MaxHistoryPoints = 2000;  // Max points to keep (supports up to 400Hz for 5 seconds)
 
     private byte _value;
     private byte _previousValue;
@@ -25,9 +25,8 @@ public partial class MonitoredByte : ObservableObject
     private byte _maxObserved = 0;
     private int _sampleCount;
 
-    // History buffer: (timestamp in ms, value)
+    // History buffer: (absolute timestamp in ms, value)
     private readonly List<(long timestamp, byte value)> _history = new(MaxHistoryPoints);
-    private long _startTimeMs;
 
     [ObservableProperty]
     private double _intensity; // 0.0=idle, 1.0=max alert
@@ -72,7 +71,7 @@ public partial class MonitoredByte : ObservableObject
     /// <summary>
     /// Updates the byte value and triggers color animation.
     /// </summary>
-    public void UpdateValue(byte newValue, Color themeColor, long timestampMs)
+    public void UpdateValue(byte newValue, Color themeColor)
     {
         _previousValue = _value;
         _value = newValue;
@@ -84,38 +83,12 @@ public partial class MonitoredByte : ObservableObject
         if (newValue < _minObserved) _minObserved = newValue;
         if (newValue > _maxObserved) _maxObserved = newValue;
 
-        // Add to history
-        AddToHistory(timestampMs, newValue);
-
-        // Calculate intensity based on change magnitude
-        Intensity = CalculateIntensity(newValue);
-
-        // Apply colors immediately
-        ApplyColors(themeColor);
-    }
-
-    /// <summary>
-    /// Overload for backwards compatibility.
-    /// </summary>
-    public void UpdateValue(byte newValue, Color themeColor)
-    {
-        if (_startTimeMs == 0)
-            _startTimeMs = Environment.TickCount64;
-
-        UpdateValue(newValue, themeColor, Environment.TickCount64 - _startTimeMs);
-    }
-
-    private void AddToHistory(long timestampMs, byte value)
-    {
-        // Initialize start time if needed
-        if (_startTimeMs == 0)
-            _startTimeMs = Environment.TickCount64 - timestampMs;
-
-        // Add new point
-        _history.Add((timestampMs, value));
+        // Add to history with absolute timestamp
+        long now = Environment.TickCount64;
+        _history.Add((now, newValue));
 
         // Prune old points (older than 5 seconds)
-        long cutoff = timestampMs - HistoryDurationMs;
+        long cutoff = now - HistoryDurationMs;
         while (_history.Count > 0 && _history[0].timestamp < cutoff)
         {
             _history.RemoveAt(0);
@@ -126,6 +99,12 @@ public partial class MonitoredByte : ObservableObject
         {
             _history.RemoveAt(0);
         }
+
+        // Calculate intensity based on change magnitude
+        Intensity = CalculateIntensity(newValue);
+
+        // Apply colors immediately
+        ApplyColors(themeColor);
     }
 
     /// <summary>
@@ -142,7 +121,7 @@ public partial class MonitoredByte : ObservableObject
         }
 
         var points = new Points();
-        long now = Environment.TickCount64 - _startTimeMs;
+        long now = Environment.TickCount64;
         long windowStart = now - HistoryDurationMs;
         int range = _maxObserved - _minObserved;
 
@@ -253,7 +232,6 @@ public partial class MonitoredByte : ObservableObject
         _maxObserved = 0;
         _sampleCount = 0;
         _history.Clear();
-        _startTimeMs = 0;
         Intensity = 0;
         DisplayText = "--";
         GraphPoints = new Points();
