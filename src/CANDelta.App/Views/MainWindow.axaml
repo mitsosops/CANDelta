@@ -1,10 +1,11 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vm="using:CANDelta.App.ViewModels"
+        xmlns:controls="using:CANDelta.App.Controls"
         x:Class="CANDelta.App.Views.MainWindow"
         x:DataType="vm:MainWindowViewModel"
         Title="{Binding Title}"
-        Width="900" Height="700"
+        Width="1200" Height="700"
         WindowStartupLocation="CenterScreen">
 
     <Grid RowDefinitions="Auto,Auto,*,Auto">
@@ -85,23 +86,32 @@
                 <!-- Header -->
                 <Border Grid.Row="0" Background="{DynamicResource SystemControlBackgroundChromeMediumLowBrush}"
                         Padding="8,4" CornerRadius="4,4,0,0">
-                    <Grid ColumnDefinitions="80,*">
-                        <TextBlock Grid.Column="0" Text="CAN ID" FontWeight="SemiBold" FontFamily="Consolas,Menlo,monospace"/>
-                        <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="0">
-                            <TextBlock Width="36" Text="B0" FontWeight="SemiBold" TextAlignment="Center" FontFamily="Consolas,Menlo,monospace"/>
-                            <TextBlock Width="36" Text="B1" FontWeight="SemiBold" TextAlignment="Center" FontFamily="Consolas,Menlo,monospace"/>
-                            <TextBlock Width="36" Text="B2" FontWeight="SemiBold" TextAlignment="Center" FontFamily="Consolas,Menlo,monospace"/>
-                            <TextBlock Width="36" Text="B3" FontWeight="SemiBold" TextAlignment="Center" FontFamily="Consolas,Menlo,monospace"/>
-                            <TextBlock Width="36" Text="B4" FontWeight="SemiBold" TextAlignment="Center" FontFamily="Consolas,Menlo,monospace"/>
-                            <TextBlock Width="36" Text="B5" FontWeight="SemiBold" TextAlignment="Center" FontFamily="Consolas,Menlo,monospace"/>
-                            <TextBlock Width="36" Text="B6" FontWeight="SemiBold" TextAlignment="Center" FontFamily="Consolas,Menlo,monospace"/>
-                            <TextBlock Width="36" Text="B7" FontWeight="SemiBold" TextAlignment="Center" FontFamily="Consolas,Menlo,monospace"/>
-                        </StackPanel>
-                    </Grid>
+                    <StackPanel Orientation="Horizontal" Spacing="0">
+                        <TextBlock Width="56" Text="CAN ID" FontWeight="SemiBold" FontFamily="Consolas,Menlo,monospace"/>
+                        <!-- Byte values -->
+                        <TextBlock Width="36" Text="B0" FontWeight="SemiBold" TextAlignment="Center" FontFamily="Consolas,Menlo,monospace"/>
+                        <TextBlock Width="36" Text="B1" FontWeight="SemiBold" TextAlignment="Center" FontFamily="Consolas,Menlo,monospace"/>
+                        <TextBlock Width="36" Text="B2" FontWeight="SemiBold" TextAlignment="Center" FontFamily="Consolas,Menlo,monospace"/>
+                        <TextBlock Width="36" Text="B3" FontWeight="SemiBold" TextAlignment="Center" FontFamily="Consolas,Menlo,monospace"/>
+                        <TextBlock Width="36" Text="B4" FontWeight="SemiBold" TextAlignment="Center" FontFamily="Consolas,Menlo,monospace"/>
+                        <TextBlock Width="36" Text="B5" FontWeight="SemiBold" TextAlignment="Center" FontFamily="Consolas,Menlo,monospace"/>
+                        <TextBlock Width="36" Text="B6" FontWeight="SemiBold" TextAlignment="Center" FontFamily="Consolas,Menlo,monospace"/>
+                        <TextBlock Width="36" Text="B7" FontWeight="SemiBold" TextAlignment="Center" FontFamily="Consolas,Menlo,monospace"/>
+                        <!-- Sparkline graphs -->
+                        <Border Width="16"/>
+                        <TextBlock Width="50" Text="G0" FontWeight="SemiBold" TextAlignment="Center" FontFamily="Consolas,Menlo,monospace" Foreground="#666666"/>
+                        <TextBlock Width="50" Text="G1" FontWeight="SemiBold" TextAlignment="Center" FontFamily="Consolas,Menlo,monospace" Foreground="#666666"/>
+                        <TextBlock Width="50" Text="G2" FontWeight="SemiBold" TextAlignment="Center" FontFamily="Consolas,Menlo,monospace" Foreground="#666666"/>
+                        <TextBlock Width="50" Text="G3" FontWeight="SemiBold" TextAlignment="Center" FontFamily="Consolas,Menlo,monospace" Foreground="#666666"/>
+                        <TextBlock Width="50" Text="G4" FontWeight="SemiBold" TextAlignment="Center" FontFamily="Consolas,Menlo,monospace" Foreground="#666666"/>
+                        <TextBlock Width="50" Text="G5" FontWeight="SemiBold" TextAlignment="Center" FontFamily="Consolas,Menlo,monospace" Foreground="#666666"/>
+                        <TextBlock Width="50" Text="G6" FontWeight="SemiBold" TextAlignment="Center" FontFamily="Consolas,Menlo,monospace" Foreground="#666666"/>
+                        <TextBlock Width="50" Text="G7" FontWeight="SemiBold" TextAlignment="Center" FontFamily="Consolas,Menlo,monospace" Foreground="#666666"/>
+                    </StackPanel>
                 </Border>
 
                 <!-- Data Rows -->
-                <ScrollViewer Grid.Row="1" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+                <ScrollViewer Grid.Row="1" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
                     <ItemsControl ItemsSource="{Binding MonitoredIds}">
                         <ItemsControl.ItemsPanel>
                             <ItemsPanelTemplate>
@@ -112,73 +122,108 @@
                             <DataTemplate x:DataType="vm:MonitoredCanId">
                                 <Border Padding="8,2" BorderThickness="0,0,0,1"
                                         BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}">
-                                    <Grid ColumnDefinitions="80,*">
+                                    <StackPanel Orientation="Horizontal" Spacing="0">
                                         <!-- CAN ID -->
-                                        <TextBlock Grid.Column="0"
+                                        <TextBlock Width="56"
                                                    Text="{Binding IdDisplay}"
                                                    FontFamily="Consolas,Menlo,monospace"
                                                    VerticalAlignment="Center"/>
 
                                         <!-- 8 Data Bytes -->
-                                        <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="0">
-                                            <!-- Byte 0 -->
-                                            <Border Width="36" Padding="2" Background="{Binding Bytes[0].Background}">
-                                                <TextBlock Text="{Binding Bytes[0].DisplayText}"
-                                                           Foreground="{Binding Bytes[0].Foreground}"
-                                                           FontFamily="Consolas,Menlo,monospace"
-                                                           TextAlignment="Center"/>
-                                            </Border>
-                                            <!-- Byte 1 -->
-                                            <Border Width="36" Padding="2" Background="{Binding Bytes[1].Background}">
-                                                <TextBlock Text="{Binding Bytes[1].DisplayText}"
-                                                           Foreground="{Binding Bytes[1].Foreground}"
-                                                           FontFamily="Consolas,Menlo,monospace"
-                                                           TextAlignment="Center"/>
-                                            </Border>
-                                            <!-- Byte 2 -->
-                                            <Border Width="36" Padding="2" Background="{Binding Bytes[2].Background}">
-                                                <TextBlock Text="{Binding Bytes[2].DisplayText}"
-                                                           Foreground="{Binding Bytes[2].Foreground}"
-                                                           FontFamily="Consolas,Menlo,monospace"
-                                                           TextAlignment="Center"/>
-                                            </Border>
-                                            <!-- Byte 3 -->
-                                            <Border Width="36" Padding="2" Background="{Binding Bytes[3].Background}">
-                                                <TextBlock Text="{Binding Bytes[3].DisplayText}"
-                                                           Foreground="{Binding Bytes[3].Foreground}"
-                                                           FontFamily="Consolas,Menlo,monospace"
-                                                           TextAlignment="Center"/>
-                                            </Border>
-                                            <!-- Byte 4 -->
-                                            <Border Width="36" Padding="2" Background="{Binding Bytes[4].Background}">
-                                                <TextBlock Text="{Binding Bytes[4].DisplayText}"
-                                                           Foreground="{Binding Bytes[4].Foreground}"
-                                                           FontFamily="Consolas,Menlo,monospace"
-                                                           TextAlignment="Center"/>
-                                            </Border>
-                                            <!-- Byte 5 -->
-                                            <Border Width="36" Padding="2" Background="{Binding Bytes[5].Background}">
-                                                <TextBlock Text="{Binding Bytes[5].DisplayText}"
-                                                           Foreground="{Binding Bytes[5].Foreground}"
-                                                           FontFamily="Consolas,Menlo,monospace"
-                                                           TextAlignment="Center"/>
-                                            </Border>
-                                            <!-- Byte 6 -->
-                                            <Border Width="36" Padding="2" Background="{Binding Bytes[6].Background}">
-                                                <TextBlock Text="{Binding Bytes[6].DisplayText}"
-                                                           Foreground="{Binding Bytes[6].Foreground}"
-                                                           FontFamily="Consolas,Menlo,monospace"
-                                                           TextAlignment="Center"/>
-                                            </Border>
-                                            <!-- Byte 7 -->
-                                            <Border Width="36" Padding="2" Background="{Binding Bytes[7].Background}">
-                                                <TextBlock Text="{Binding Bytes[7].DisplayText}"
-                                                           Foreground="{Binding Bytes[7].Foreground}"
-                                                           FontFamily="Consolas,Menlo,monospace"
-                                                           TextAlignment="Center"/>
-                                            </Border>
-                                        </StackPanel>
-                                    </Grid>
+                                        <Border Width="36" Padding="2" Background="{Binding Bytes[0].Background}">
+                                            <TextBlock Text="{Binding Bytes[0].DisplayText}"
+                                                       Foreground="{Binding Bytes[0].Foreground}"
+                                                       FontFamily="Consolas,Menlo,monospace"
+                                                       TextAlignment="Center"/>
+                                        </Border>
+                                        <Border Width="36" Padding="2" Background="{Binding Bytes[1].Background}">
+                                            <TextBlock Text="{Binding Bytes[1].DisplayText}"
+                                                       Foreground="{Binding Bytes[1].Foreground}"
+                                                       FontFamily="Consolas,Menlo,monospace"
+                                                       TextAlignment="Center"/>
+                                        </Border>
+                                        <Border Width="36" Padding="2" Background="{Binding Bytes[2].Background}">
+                                            <TextBlock Text="{Binding Bytes[2].DisplayText}"
+                                                       Foreground="{Binding Bytes[2].Foreground}"
+                                                       FontFamily="Consolas,Menlo,monospace"
+                                                       TextAlignment="Center"/>
+                                        </Border>
+                                        <Border Width="36" Padding="2" Background="{Binding Bytes[3].Background}">
+                                            <TextBlock Text="{Binding Bytes[3].DisplayText}"
+                                                       Foreground="{Binding Bytes[3].Foreground}"
+                                                       FontFamily="Consolas,Menlo,monospace"
+                                                       TextAlignment="Center"/>
+                                        </Border>
+                                        <Border Width="36" Padding="2" Background="{Binding Bytes[4].Background}">
+                                            <TextBlock Text="{Binding Bytes[4].DisplayText}"
+                                                       Foreground="{Binding Bytes[4].Foreground}"
+                                                       FontFamily="Consolas,Menlo,monospace"
+                                                       TextAlignment="Center"/>
+                                        </Border>
+                                        <Border Width="36" Padding="2" Background="{Binding Bytes[5].Background}">
+                                            <TextBlock Text="{Binding Bytes[5].DisplayText}"
+                                                       Foreground="{Binding Bytes[5].Foreground}"
+                                                       FontFamily="Consolas,Menlo,monospace"
+                                                       TextAlignment="Center"/>
+                                        </Border>
+                                        <Border Width="36" Padding="2" Background="{Binding Bytes[6].Background}">
+                                            <TextBlock Text="{Binding Bytes[6].DisplayText}"
+                                                       Foreground="{Binding Bytes[6].Foreground}"
+                                                       FontFamily="Consolas,Menlo,monospace"
+                                                       TextAlignment="Center"/>
+                                        </Border>
+                                        <Border Width="36" Padding="2" Background="{Binding Bytes[7].Background}">
+                                            <TextBlock Text="{Binding Bytes[7].DisplayText}"
+                                                       Foreground="{Binding Bytes[7].Foreground}"
+                                                       FontFamily="Consolas,Menlo,monospace"
+                                                       TextAlignment="Center"/>
+                                        </Border>
+
+                                        <!-- Spacer -->
+                                        <Border Width="16"/>
+
+                                        <!-- 8 Sparkline Graphs -->
+                                        <Border Width="50" Height="16" Margin="0,1" BorderThickness="1" BorderBrush="#333333" Background="#1A1A1A">
+                                            <controls:Sparkline Points="{Binding Bytes[0].GraphPoints}"
+                                                               Stroke="{Binding Bytes[0].Foreground}"
+                                                               StrokeThickness="1"/>
+                                        </Border>
+                                        <Border Width="50" Height="16" Margin="0,1" BorderThickness="1" BorderBrush="#333333" Background="#1A1A1A">
+                                            <controls:Sparkline Points="{Binding Bytes[1].GraphPoints}"
+                                                               Stroke="{Binding Bytes[1].Foreground}"
+                                                               StrokeThickness="1"/>
+                                        </Border>
+                                        <Border Width="50" Height="16" Margin="0,1" BorderThickness="1" BorderBrush="#333333" Background="#1A1A1A">
+                                            <controls:Sparkline Points="{Binding Bytes[2].GraphPoints}"
+                                                               Stroke="{Binding Bytes[2].Foreground}"
+                                                               StrokeThickness="1"/>
+                                        </Border>
+                                        <Border Width="50" Height="16" Margin="0,1" BorderThickness="1" BorderBrush="#333333" Background="#1A1A1A">
+                                            <controls:Sparkline Points="{Binding Bytes[3].GraphPoints}"
+                                                               Stroke="{Binding Bytes[3].Foreground}"
+                                                               StrokeThickness="1"/>
+                                        </Border>
+                                        <Border Width="50" Height="16" Margin="0,1" BorderThickness="1" BorderBrush="#333333" Background="#1A1A1A">
+                                            <controls:Sparkline Points="{Binding Bytes[4].GraphPoints}"
+                                                               Stroke="{Binding Bytes[4].Foreground}"
+                                                               StrokeThickness="1"/>
+                                        </Border>
+                                        <Border Width="50" Height="16" Margin="0,1" BorderThickness="1" BorderBrush="#333333" Background="#1A1A1A">
+                                            <controls:Sparkline Points="{Binding Bytes[5].GraphPoints}"
+                                                               Stroke="{Binding Bytes[5].Foreground}"
+                                                               StrokeThickness="1"/>
+                                        </Border>
+                                        <Border Width="50" Height="16" Margin="0,1" BorderThickness="1" BorderBrush="#333333" Background="#1A1A1A">
+                                            <controls:Sparkline Points="{Binding Bytes[6].GraphPoints}"
+                                                               Stroke="{Binding Bytes[6].Foreground}"
+                                                               StrokeThickness="1"/>
+                                        </Border>
+                                        <Border Width="50" Height="16" Margin="0,1" BorderThickness="1" BorderBrush="#333333" Background="#1A1A1A">
+                                            <controls:Sparkline Points="{Binding Bytes[7].GraphPoints}"
+                                                               Stroke="{Binding Bytes[7].Foreground}"
+                                                               StrokeThickness="1"/>
+                                        </Border>
+                                    </StackPanel>
                                 </Border>
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>

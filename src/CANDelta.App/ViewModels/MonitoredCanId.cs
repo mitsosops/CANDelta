@@ -119,6 +119,19 @@ public partial class MonitoredCanId : ObservableObject, IComparable<MonitoredCan
     }
 
     /// <summary>
+    /// Updates graph points for all bytes.
+    /// </summary>
+    /// <param name="graphWidth">Width of each graph in pixels.</param>
+    /// <param name="graphHeight">Height of each graph in pixels.</param>
+    public void UpdateGraphPoints(double graphWidth, double graphHeight)
+    {
+        for (int i = 0; i < LastDlc && i < 8; i++)
+        {
+            Bytes[i].UpdateGraphPoints(graphWidth, graphHeight);
+        }
+    }
+
+    /// <summary>
     /// Compare by CAN ID for sorted insertion.
     /// </summary>
     public int CompareTo(MonitoredCanId? other)

@@ -1,3 +1,4 @@
+using Avalonia;
 using Avalonia.Media;
 using CommunityToolkit.Mvvm.ComponentModel;
 
@@ -6,6 +7,7 @@ namespace CANDelta.App.ViewModels;
 /// <summary>
 /// Represents a single byte in a CAN frame with value tracking and animated color transitions.
 /// Tracks min/max observed values to calculate change intensity.
+/// Also maintains a history buffer for sparkline visualization.
 /// </summary>
 public partial class MonitoredByte : ObservableObject
 {
@@ -13,11 +15,19 @@ public partial class MonitoredByte : ObservableObject
     private static readonly Color IdleForeground = Color.Parse("#888888");
     private static readonly Color IdleBackground = Colors.Transparent;
 
+    // History settings
+    private const int HistoryDurationMs = 5000; // 5 seconds
+    private const int MaxHistoryPoints = 150;   // Max points to keep (for performance)
+
     private byte _value;
     private byte _previousValue;
     private byte _minObserved = 255;
     private byte _maxObserved = 0;
     private int _sampleCount;
+
+    // History buffer: (timestamp in ms, value)
+    private readonly List<(long timestamp, byte value)> _history = new(MaxHistoryPoints);
+    private long _startTimeMs;
 
     [ObservableProperty]
     private double _intensity; // 0.0=idle, 1.0=max alert
@@ -31,10 +41,23 @@ public partial class MonitoredByte : ObservableObject
     [ObservableProperty]
     private string _displayText = "--";
 
+    [ObservableProperty]
+    private Points _graphPoints = new();
+
     /// <summary>
     /// Current byte value.
     /// </summary>
     public byte Value => _value;
+
+    /// <summary>
+    /// Minimum observed value (for graph scaling).
+    /// </summary>
+    public byte MinObserved => _minObserved;
+
+    /// <summary>
+    /// Maximum observed value (for graph scaling).
+    /// </summary>
+    public byte MaxObserved => _maxObserved;
 
     /// <summary>
     /// Whether this byte is currently animating (intensity > 0).
@@ -42,9 +65,14 @@ public partial class MonitoredByte : ObservableObject
     public bool IsAnimating => Intensity > 0.001;
 
     /// <summary>
+    /// Whether this byte has enough data for a meaningful graph.
+    /// </summary>
+    public bool HasGraphData => _history.Count >= 2;
+
+    /// <summary>
     /// Updates the byte value and triggers color animation.
     /// </summary>
-    public void UpdateValue(byte newValue, Color themeColor)
+    public void UpdateValue(byte newValue, Color themeColor, long timestampMs)
     {
         _previousValue = _value;
         _value = newValue;
@@ -56,11 +84,85 @@ public partial class MonitoredByte : ObservableObject
         if (newValue < _minObserved) _minObserved = newValue;
         if (newValue > _maxObserved) _maxObserved = newValue;
 
+        // Add to history
+        AddToHistory(timestampMs, newValue);
+
         // Calculate intensity based on change magnitude
         Intensity = CalculateIntensity(newValue);
 
         // Apply colors immediately
         ApplyColors(themeColor);
+    }
+
+    /// <summary>
+    /// Overload for backwards compatibility.
+    /// </summary>
+    public void UpdateValue(byte newValue, Color themeColor)
+    {
+        if (_startTimeMs == 0)
+            _startTimeMs = Environment.TickCount64;
+
+        UpdateValue(newValue, themeColor, Environment.TickCount64 - _startTimeMs);
+    }
+
+    private void AddToHistory(long timestampMs, byte value)
+    {
+        // Initialize start time if needed
+        if (_startTimeMs == 0)
+            _startTimeMs = Environment.TickCount64 - timestampMs;
+
+        // Add new point
+        _history.Add((timestampMs, value));
+
+        // Prune old points (older than 5 seconds)
+        long cutoff = timestampMs - HistoryDurationMs;
+        while (_history.Count > 0 && _history[0].timestamp < cutoff)
+        {
+            _history.RemoveAt(0);
+        }
+
+        // Also limit max points for performance
+        while (_history.Count > MaxHistoryPoints)
+        {
+            _history.RemoveAt(0);
+        }
+    }
+
+    /// <summary>
+    /// Updates the graph points for rendering. Call periodically from UI timer.
+    /// </summary>
+    /// <param name="graphWidth">Width of the graph area in pixels.</param>
+    /// <param name="graphHeight">Height of the graph area in pixels.</param>
+    public void UpdateGraphPoints(double graphWidth, double graphHeight)
+    {
+        if (_history.Count < 2 || _minObserved == _maxObserved)
+        {
+            GraphPoints = new Points();
+            return;
+        }
+
+        var points = new Points();
+        long now = Environment.TickCount64 - _startTimeMs;
+        long windowStart = now - HistoryDurationMs;
+        int range = _maxObserved - _minObserved;
+
+        foreach (var (timestamp, value) in _history)
+        {
+            // X: map timestamp to 0..graphWidth (oldest on left, newest on right)
+            double x = (timestamp - windowStart) / (double)HistoryDurationMs * graphWidth;
+
+            // Y: map value to graphHeight..0 (min at bottom, max at top)
+            double normalizedY = (value - _minObserved) / (double)range;
+            double y = graphHeight - (normalizedY * graphHeight);
+
+            // Clamp x to visible area
+            if (x >= 0 && x <= graphWidth)
+            {
+                points.Add(new Point(x, Math.Clamp(y, 0, graphHeight)));
+            }
+        }
+
+        GraphPoints = points;
     }
 
     /// <summary>
@@ -150,8 +252,11 @@ public partial class MonitoredByte : ObservableObject
         _minObserved = 255;
         _maxObserved = 0;
         _sampleCount = 0;
+        _history.Clear();
+        _startTimeMs = 0;
         Intensity = 0;
         DisplayText = "--";
+        GraphPoints = new Points();
         Foreground.Color = IdleForeground;
         Background.Color = IdleBackground;
         OnPropertyChanged(nameof(Foreground));

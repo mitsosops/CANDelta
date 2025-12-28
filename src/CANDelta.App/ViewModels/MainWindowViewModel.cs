@@ -20,6 +20,7 @@ public partial class MainWindowViewModel : ObservableObject
     // Timers
     private DispatcherTimer? _batchUpdateTimer;
     private DispatcherTimer? _fadeTimer;
+    private DispatcherTimer? _graphUpdateTimer;
 
     // FPS tracking
     private int _framesThisSecond;
@@ -28,6 +29,8 @@ public partial class MainWindowViewModel : ObservableObject
     // Constants
     private const int BatchSize = 100;
     private const double FadePerTick = 0.04; // ~1.5s fade at 60fps (90 ticks * 0.04 ≈ 3.6, but intensity starts < 1)
+    private const double GraphWidth = 50.0;   // Width of sparkline graphs
+    private const double GraphHeight = 16.0;  // Height of sparkline graphs
 
     [ObservableProperty]
     private string _title = "CANDelta - CAN Bus Monitor";
@@ -93,6 +96,14 @@ public partial class MainWindowViewModel : ObservableObject
         };
         _fadeTimer.Tick += OnFadeTimerTick;
         _fadeTimer.Start();
+
+        // Graph update timer: update sparkline graphs at 10fps (100ms)
+        _graphUpdateTimer = new DispatcherTimer
+        {
+            Interval = TimeSpan.FromMilliseconds(100)
+        };
+        _graphUpdateTimer.Tick += OnGraphUpdateTick;
+        _graphUpdateTimer.Start();
     }
 
     [RelayCommand]
@@ -264,6 +275,15 @@ public partial class MainWindowViewModel : ObservableObject
         foreach (var item in toRemove)
         {
             _activeAnimations.Remove(item);
+        }
+    }
+
+    private void OnGraphUpdateTick(object? sender, EventArgs e)
+    {
+        // Update graph points for all monitored IDs
+        foreach (var item in MonitoredIds)
+        {
+            item.UpdateGraphPoints(GraphWidth, GraphHeight);
         }
     }
 
