@@ -9,12 +9,23 @@ public enum CommandOpcode : byte
     Ping = 0x01,
     GetVersion = 0x04,
     GetStatus = 0x05,
+    Debug = 0x06,
+    GetPerfStats = 0x07,
+    GetDeviceId = 0x08,
+    GetErrorCounters = 0x09,
+    ListCommands = 0x0A,
+    GetConfig = 0x0B,
+    GetRegisters = 0x0C,
     StartCapture = 0x10,
     StopCapture = 0x11,
     SetSpeed = 0x20,
     SetFilter = 0x21,
     ClearFilters = 0x22,
     SetMode = 0x23,
+    SetTiming = 0x24,
+    SetMask = 0x25,
+    SetOneshot = 0x26,
+    ResetCan = 0x27,
     TransmitFrame = 0x30,
 }
 
@@ -28,6 +39,13 @@ public enum ResponseCode : byte
     Version = 0x82,
     Status = 0x83,
     CanFrame = 0x84,
+    Debug = 0x85,
+    PerfStats = 0x86,
+    DeviceId = 0x87,
+    ErrorCounters = 0x88,
+    CommandList = 0x89,
+    Config = 0x8A,
+    Registers = 0x8B,
 }
 
 /// <summary>
@@ -51,6 +69,17 @@ public enum CanMode : byte
     Loopback = 2,
     ListenOnly = 3,
     Config = 4,
+}
+
+/// <summary>
+/// CAN error states per CAN 2.0B specification.
+/// </summary>
+public enum CanErrorState : byte
+{
+    ErrorActive = 0,
+    ErrorWarning = 1,
+    ErrorPassive = 2,
+    BusOff = 3,
 }
 
 /// <summary>
@@ -78,4 +107,25 @@ public record DeviceVersion
     public byte Patch { get; init; }
 
     public override string ToString() => $"v{Major}.{Minor}.{Patch} (protocol {ProtocolVersion})";
+}
+
+/// <summary>
+/// Performance statistics from the device.
+/// </summary>
+public record PerfStats
+{
+    public uint FramesPerSecond { get; init; }
+    public uint PeakFps { get; init; }
+    public uint DroppedFrames { get; init; }
+    public byte BufferUtilization { get; init; }
+}
+
+/// <summary>
+/// CAN error counters.
+/// </summary>
+public record ErrorCounters
+{
+    public byte Tec { get; init; }
+    public byte Rec { get; init; }
+    public CanErrorState State { get; init; }
 }

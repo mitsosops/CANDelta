@@ -295,6 +295,7 @@ Use `CMD_RESET_CAN` (0x27) to manually trigger reset and restore if needed.
 | 0x05 | Timing configuration failed |
 | 0x06 | Invalid filter or mask |
 | 0x07 | CAN reset failed |
+| 0x08 | Payload too large |
 | 0xFF | Unknown command |
 
 ## Example: Get Performance Stats
