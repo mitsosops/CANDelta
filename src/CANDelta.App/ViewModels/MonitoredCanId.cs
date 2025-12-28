@@ -9,6 +9,10 @@ namespace CANDelta.App.ViewModels;
 /// </summary>
 public partial class MonitoredCanId : ObservableObject, IComparable<MonitoredCanId>
 {
+    // Frequency tracking
+    private const int FrequencyWindowMs = 1000; // 1 second window
+    private readonly Queue<long> _frameTimestamps = new();
+
     /// <summary>
     /// The CAN ID being monitored.
     /// </summary>
@@ -38,6 +42,12 @@ public partial class MonitoredCanId : ObservableObject, IComparable<MonitoredCan
     private int _frameCount;
 
     /// <summary>
+    /// Approximate frequency of this CAN ID in Hz.
+    /// </summary>
+    [ObservableProperty]
+    private int _frequencyHz;
+
+    /// <summary>
     /// Last DLC received (for proper byte display).
     /// </summary>
     public byte LastDlc { get; private set; }
@@ -62,6 +72,18 @@ public partial class MonitoredCanId : ObservableObject, IComparable<MonitoredCan
     {
         FrameCount++;
         LastDlc = frame.Dlc;
+
+        // Track timestamp for frequency calculation
+        long now = Environment.TickCount64;
+        _frameTimestamps.Enqueue(now);
+
+        // Prune old timestamps and calculate frequency
+        long cutoff = now - FrequencyWindowMs;
+        while (_frameTimestamps.Count > 0 && _frameTimestamps.Peek() < cutoff)
+        {
+            _frameTimestamps.Dequeue();
+        }
+        FrequencyHz = _frameTimestamps.Count;
 
         // Update each byte up to DLC
         for (int i = 0; i < frame.Dlc && i < 8; i++)
@@ -111,7 +133,9 @@ public partial class MonitoredCanId : ObservableObject, IComparable<MonitoredCan
     public void Reset()
     {
         FrameCount = 0;
+        FrequencyHz = 0;
         LastDlc = 0;
+        _frameTimestamps.Clear();
         for (int i = 0; i < 8; i++)
         {
             Bytes[i].Reset();

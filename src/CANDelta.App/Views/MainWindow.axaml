@@ -107,6 +107,9 @@
                         <TextBlock Width="50" Text="G5" FontWeight="SemiBold" TextAlignment="Center" FontFamily="Consolas,Menlo,monospace" Foreground="#666666"/>
                         <TextBlock Width="50" Text="G6" FontWeight="SemiBold" TextAlignment="Center" FontFamily="Consolas,Menlo,monospace" Foreground="#666666"/>
                         <TextBlock Width="50" Text="G7" FontWeight="SemiBold" TextAlignment="Center" FontFamily="Consolas,Menlo,monospace" Foreground="#666666"/>
+                        <!-- Frequency -->
+                        <Border Width="16"/>
+                        <TextBlock Width="56" Text="Hz" FontWeight="SemiBold" TextAlignment="Right" FontFamily="Consolas,Menlo,monospace"/>
                     </StackPanel>
                 </Border>
 
@@ -223,6 +226,15 @@
                                                                Stroke="{Binding Bytes[7].Foreground}"
                                                                StrokeThickness="1"/>
                                         </Border>
+
+                                        <!-- Frequency -->
+                                        <Border Width="16"/>
+                                        <TextBlock Width="56"
+                                                   Text="{Binding FrequencyHz}"
+                                                   FontFamily="Consolas,Menlo,monospace"
+                                                   TextAlignment="Right"
+                                                   VerticalAlignment="Center"
+                                                   Foreground="#AAAAAA"/>
                                     </StackPanel>
                                 </Border>
                             </DataTemplate>
