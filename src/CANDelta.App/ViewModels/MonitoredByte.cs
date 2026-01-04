@@ -15,6 +15,19 @@ public partial class MonitoredByte : ObservableObject
     private static readonly Color IdleForeground = Color.Parse("#888888");
     private static readonly Color IdleBackground = Colors.Transparent;
 
+    // Pre-computed hex strings to avoid ToString allocations (256 possible byte values)
+    private static readonly string[] HexStrings = CreateHexStringCache();
+
+    private static string[] CreateHexStringCache()
+    {
+        var cache = new string[256];
+        for (int i = 0; i < 256; i++)
+        {
+            cache[i] = i.ToString("X2");
+        }
+        return cache;
+    }
+
     // History settings
     private const int HistoryDurationMs = 5000; // 5 seconds
     private const int HistoryCapacity = 2000;   // Fixed capacity (supports up to 400Hz for 5 seconds)
@@ -85,7 +98,7 @@ public partial class MonitoredByte : ObservableObject
         _value = newValue;
         _sampleCount++;
 
-        DisplayText = newValue.ToString("X2");
+        DisplayText = HexStrings[newValue]; // Use cached string to avoid allocation
 
         // Update min/max tracking
         if (newValue < _minObserved) _minObserved = newValue;

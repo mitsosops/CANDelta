@@ -18,6 +18,7 @@ public partial class MainWindowViewModel : ObservableObject
     private readonly ConcurrentQueue<CanFrame> _pendingFrames = new();
     private readonly Dictionary<uint, MonitoredCanId> _monitoredIdsLookup = new();
     private readonly HashSet<MonitoredCanId> _activeAnimations = new();
+    private readonly List<MonitoredCanId> _animationsToRemove = new(); // Reusable list to avoid allocations
 
     // Timers
     private DispatcherTimer? _batchUpdateTimer;
@@ -456,18 +457,18 @@ public partial class MainWindowViewModel : ObservableObject
         if (_activeAnimations.Count == 0) return;
 
         var themeColor = SelectedTheme.AlertColor;
-        var toRemove = new List<MonitoredCanId>();
+        _animationsToRemove.Clear(); // Reuse list instead of allocating new one
 
         foreach (var item in _activeAnimations)
         {
             item.ApplyFade(FadePerTick, themeColor);
             if (!item.HasActiveAnimation())
             {
-                toRemove.Add(item);
+                _animationsToRemove.Add(item);
             }
         }
 
-        foreach (var item in toRemove)
+        foreach (var item in _animationsToRemove)
         {
             _activeAnimations.Remove(item);
         }
