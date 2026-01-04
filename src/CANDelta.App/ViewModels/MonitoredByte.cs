@@ -46,8 +46,11 @@ public partial class MonitoredByte : ObservableObject
     // Dirty flag for graph updates - only rebuild when data changed
     private bool _graphDirty;
 
-    // Reusable Points collection to avoid allocations
-    private Points _graphPointsInternal = new();
+    // Double-buffer Points collections - swap between them to ensure reference changes
+    // (Avalonia doesn't detect changes when same object reference is reassigned)
+    private readonly Points _graphPointsA = new();
+    private readonly Points _graphPointsB = new();
+    private bool _usePointsA = true;
 
     [ObservableProperty]
     private double _intensity; // 0.0=idle, 1.0=max alert
@@ -160,19 +163,16 @@ public partial class MonitoredByte : ObservableObject
         if (!_graphDirty) return;
         _graphDirty = false;
 
+        // Swap buffers - ensures reference change so Avalonia detects update
+        _usePointsA = !_usePointsA;
+        var points = _usePointsA ? _graphPointsA : _graphPointsB;
+        points.Clear();
+
         if (_historyCount < 2 || _minObserved == _maxObserved)
         {
-            if (_graphPointsInternal.Count > 0)
-            {
-                _graphPointsInternal.Clear();
-                GraphPoints = _graphPointsInternal;
-                OnPropertyChanged(nameof(GraphPoints));
-            }
+            GraphPoints = points;
             return;
         }
-
-        // Reuse existing collection - clear instead of allocating new
-        _graphPointsInternal.Clear();
 
         long now = Environment.TickCount64;
         long windowStart = now - HistoryDurationMs;
@@ -194,13 +194,11 @@ public partial class MonitoredByte : ObservableObject
             // Clamp x to visible area
             if (x >= 0 && x <= graphWidth)
             {
-                _graphPointsInternal.Add(new Point(x, Math.Clamp(y, 0, graphHeight)));
+                points.Add(new Point(x, Math.Clamp(y, 0, graphHeight)));
             }
         }
 
-        // Trigger binding update (GraphPoints already references _graphPointsInternal)
-        GraphPoints = _graphPointsInternal;
-        OnPropertyChanged(nameof(GraphPoints));
+        GraphPoints = points;
     }
 
     /// <summary>
@@ -299,14 +297,15 @@ public partial class MonitoredByte : ObservableObject
         Intensity = 0;
         DisplayText = "--";
 
-        // Clear and reuse existing Points collection
-        _graphPointsInternal.Clear();
-        GraphPoints = _graphPointsInternal;
+        // Clear both Points buffers and swap to ensure reference change
+        _graphPointsA.Clear();
+        _graphPointsB.Clear();
+        _usePointsA = !_usePointsA;
+        GraphPoints = _usePointsA ? _graphPointsA : _graphPointsB;
 
         Foreground.Color = IdleForeground;
         Background.Color = IdleBackground;
         OnPropertyChanged(nameof(Foreground));
         OnPropertyChanged(nameof(Background));
-        OnPropertyChanged(nameof(GraphPoints));
     }
 }

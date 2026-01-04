@@ -435,6 +435,9 @@ public partial class MainWindowViewModel : ObservableObject
         // Update bytes and mark as animating
         monitoredId.UpdateFromFrame(frame, themeColor);
         _activeAnimations.Add(monitoredId);
+
+        // Return frame data to pool after processing
+        ProtocolParser.ReturnFrameData(frame.Data);
     }
 
     private void InsertSorted(MonitoredCanId item)

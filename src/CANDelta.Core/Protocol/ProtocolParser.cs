@@ -1,3 +1,5 @@
+using System.Buffers;
+
 namespace CANDelta.Core.Protocol;
 
 /// <summary>
@@ -8,7 +10,12 @@ public class ProtocolParser
     private const byte Stx = 0x02;
     private const byte Etx = 0x03;
 
-    private readonly List<byte> _buffer = new();
+    // Fixed buffer sized for largest expected packet (Config response = 49 bytes payload + 2 header)
+    // See protocol.md for payload sizes
+    private const int MaxPacketSize = 64;
+    private readonly byte[] _buffer = new byte[MaxPacketSize];
+    private int _bufferPos;
+
     private enum ParseState { WaitingForStx, WaitingForOpcode, WaitingForLength, ReadingPayload, WaitingForEtx }
     private ParseState _state = ParseState.WaitingForStx;
     private int _payloadLength;
@@ -42,25 +49,25 @@ public class ProtocolParser
             case ParseState.WaitingForStx:
                 if (b == Stx)
                 {
-                    _buffer.Clear();
+                    _bufferPos = 0;
                     _state = ParseState.WaitingForOpcode;
                 }
                 break;
 
             case ParseState.WaitingForOpcode:
-                _buffer.Add(b);
+                if (_bufferPos < MaxPacketSize) _buffer[_bufferPos++] = b;
                 _state = ParseState.WaitingForLength;
                 break;
 
             case ParseState.WaitingForLength:
-                _buffer.Add(b);
+                if (_bufferPos < MaxPacketSize) _buffer[_bufferPos++] = b;
                 _payloadLength = b;
                 _payloadRead = 0;
                 _state = _payloadLength > 0 ? ParseState.ReadingPayload : ParseState.WaitingForEtx;
                 break;
 
             case ParseState.ReadingPayload:
-                _buffer.Add(b);
+                if (_bufferPos < MaxPacketSize) _buffer[_bufferPos++] = b;
                 _payloadRead++;
                 if (_payloadRead >= _payloadLength)
                 {
@@ -71,27 +78,26 @@ public class ProtocolParser
             case ParseState.WaitingForEtx:
                 if (b == Etx)
                 {
-                    ProcessPacket(_buffer.ToArray());
+                    ProcessPacket(_buffer, _bufferPos);
                 }
                 // Reset state regardless (handles framing errors by resyncing)
-                _buffer.Clear();
+                _bufferPos = 0;
                 _state = ParseState.WaitingForStx;
                 break;
         }
     }
 
-    private void ProcessPacket(byte[] data)
+    private void ProcessPacket(byte[] data, int length)
     {
-        if (data.Length < 2) return;
+        if (length < 2) return;
 
         var code = (ResponseCode)data[0];
-        var len = data[1];
-        var payload = data.Length > 2 ? data[2..Math.Min(2 + len, data.Length)] : Array.Empty<byte>();
+        var payloadLen = data[1];
 
-        // CAN frame responses get special handling
+        // CAN frame responses get special handling - hot path, avoid allocations
         if (code == ResponseCode.CanFrame)
         {
-            var frame = ParseCanFrame(payload);
+            var frame = ParseCanFrame(data, 2, Math.Min(payloadLen, length - 2));
             if (frame.HasValue)
             {
                 FrameReceived?.Invoke(frame.Value);
@@ -99,15 +105,20 @@ public class ProtocolParser
             return;
         }
 
-        // All other responses
+        // Other responses are less frequent - allocation is acceptable
+        var payload = length > 2 ? data[2..Math.Min(2 + payloadLen, length)] : Array.Empty<byte>();
         ResponseReceived?.Invoke(code, payload);
     }
 
-    private static CanFrame? ParseCanFrame(byte[] data)
-    {
-        if (data.Length < 14) return null;
+    // Pool for frame data arrays - all CAN frames have 0-8 bytes, rent fixed size 8
+    private static readonly ArrayPool<byte> FrameDataPool = ArrayPool<byte>.Create(8, 256);
 
-        int idx = 0;
+    private static CanFrame? ParseCanFrame(byte[] data, int offset, int length)
+    {
+        if (length < 14) return null;
+
+        int idx = offset;
+        int end = offset + length;
 
         // Timestamp (8 bytes LE)
         ulong timestamp = 0;
@@ -131,9 +142,9 @@ public class ProtocolParser
         // DLC
         byte dlc = Math.Min(data[idx++], (byte)8);
 
-        // Data
-        byte[] frameData = new byte[dlc];
-        for (int i = 0; i < dlc && idx < data.Length; i++)
+        // Data - rent from pool instead of allocating
+        byte[] frameData = FrameDataPool.Rent(8);
+        for (int i = 0; i < dlc && idx < end; i++)
         {
             frameData[i] = data[idx++];
         }
@@ -147,6 +158,17 @@ public class ProtocolParser
             IsRtr = rtr,
             TimestampUs = timestamp
         };
+    }
+
+    /// <summary>
+    /// Returns a frame's data array to the pool. Call after processing the frame.
+    /// </summary>
+    public static void ReturnFrameData(byte[] data)
+    {
+        if (data != null && data.Length >= 8)
+        {
+            FrameDataPool.Return(data);
+        }
     }
 
     /// <summary>
