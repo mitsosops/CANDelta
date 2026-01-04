@@ -12,6 +12,7 @@ namespace CANDelta.App.ViewModels;
 public partial class MainWindowViewModel : ObservableObject
 {
     private readonly ISerialService _serialService;
+    private readonly TraceRecorderService _traceRecorder;
 
     // Frame processing
     private readonly ConcurrentQueue<CanFrame> _pendingFrames = new();
@@ -48,6 +49,12 @@ public partial class MainWindowViewModel : ObservableObject
 
     [ObservableProperty]
     private bool _isCapturing;
+
+    [ObservableProperty]
+    private bool _isRecording;
+
+    [ObservableProperty]
+    private string _recordingFilePath = string.Empty;
 
     [ObservableProperty]
     private DetectedPort? _selectedPort;
@@ -88,6 +95,8 @@ public partial class MainWindowViewModel : ObservableObject
         _serialService.FrameReceived += OnFrameReceived;
         _serialService.ConnectionChanged += OnConnectionChanged;
         _serialService.ErrorOccurred += OnError;
+
+        _traceRecorder = new TraceRecorderService();
 
         InitializeTimers();
         RefreshPorts();
@@ -329,6 +338,32 @@ public partial class MainWindowViewModel : ObservableObject
     }
 
     [RelayCommand]
+    private void ToggleRecording()
+    {
+        if (IsRecording)
+        {
+            _traceRecorder.StopRecording();
+            IsRecording = false;
+            StatusMessage = $"Recording stopped - saved to {Path.GetFileName(RecordingFilePath)}";
+            RecordingFilePath = string.Empty;
+        }
+        else
+        {
+            try
+            {
+                var filePath = _traceRecorder.StartRecording(SelectedSpeed);
+                RecordingFilePath = filePath;
+                IsRecording = true;
+                StatusMessage = $"Recording to {Path.GetFileName(filePath)}...";
+            }
+            catch (Exception ex)
+            {
+                StatusMessage = $"Failed to start recording: {ex.Message}";
+            }
+        }
+    }
+
+    [RelayCommand]
     private void ClearMonitor()
     {
         // Clear pending frames
@@ -352,6 +387,12 @@ public partial class MainWindowViewModel : ObservableObject
     {
         // Thread-safe enqueue (called from serial thread)
         _pendingFrames.Enqueue(frame);
+
+        // Record to trace file if recording is active
+        if (IsRecording)
+        {
+            _traceRecorder.RecordFrame(frame);
+        }
     }
 
     private void OnBatchUpdateTick(object? sender, EventArgs e)

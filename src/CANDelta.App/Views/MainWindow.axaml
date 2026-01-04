@@ -81,6 +81,16 @@
                         <TextBlock Text="{Binding IsCapturing, Converter={x:Static vm:MainWindowViewModel.CaptureButtonConverter}}"/>
                     </StackPanel>
                 </Button>
+
+                <!-- Record -->
+                <Button Command="{Binding ToggleRecordingCommand}"
+                        ToolTip.Tip="Record CAN messages to a PEAK TRC trace file">
+                    <StackPanel Orientation="Horizontal" Spacing="4">
+                        <Ellipse Width="10" Height="10"
+                                 Fill="{Binding IsRecording, Converter={x:Static vm:MainWindowViewModel.RecordLedConverter}}"/>
+                        <TextBlock Text="{Binding IsRecording, Converter={x:Static vm:MainWindowViewModel.RecordButtonConverter}}"/>
+                    </StackPanel>
+                </Button>
             </StackPanel>
         </Border>
 

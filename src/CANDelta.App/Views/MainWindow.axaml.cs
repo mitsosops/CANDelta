@@ -27,6 +27,12 @@ namespace CANDelta.App.ViewModels
         public static FuncValueConverter<bool, IBrush> CaptureLedConverter { get; } =
             new(isCapturing => isCapturing ? Brushes.Red : Brushes.Gray);
 
+        public static FuncValueConverter<bool, string> RecordButtonConverter { get; } =
+            new(isRecording => isRecording ? "Stop Recording" : "Record");
+
+        public static FuncValueConverter<bool, IBrush> RecordLedConverter { get; } =
+            new(isRecording => isRecording ? Brushes.OrangeRed : Brushes.Gray);
+
         public static FuncValueConverter<Color, IBrush> ColorToBrushConverter { get; } =
             new(color => new SolidColorBrush(color));
 
