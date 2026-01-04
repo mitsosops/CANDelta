@@ -17,7 +17,7 @@ public partial class MonitoredByte : ObservableObject
 
     // History settings
     private const int HistoryDurationMs = 5000; // 5 seconds
-    private const int MaxHistoryPoints = 2000;  // Max points to keep (supports up to 400Hz for 5 seconds)
+    private const int HistoryCapacity = 2000;   // Fixed capacity (supports up to 400Hz for 5 seconds)
 
     private byte _value;
     private byte _previousValue;
@@ -25,8 +25,16 @@ public partial class MonitoredByte : ObservableObject
     private byte _maxObserved = 0;
     private int _sampleCount;
 
-    // History buffer: (absolute timestamp in ms, value)
-    private readonly List<(long timestamp, byte value)> _history = new(MaxHistoryPoints);
+    // Circular buffer for history: avoids O(n) RemoveAt(0) operations
+    private readonly (long timestamp, byte value)[] _historyBuffer = new (long, byte)[HistoryCapacity];
+    private int _historyHead;  // Index of oldest item
+    private int _historyCount; // Number of items in buffer
+
+    // Dirty flag for graph updates - only rebuild when data changed
+    private bool _graphDirty;
+
+    // Reusable Points collection to avoid allocations
+    private Points _graphPointsInternal = new();
 
     [ObservableProperty]
     private double _intensity; // 0.0=idle, 1.0=max alert
@@ -66,7 +74,7 @@ public partial class MonitoredByte : ObservableObject
     /// <summary>
     /// Whether this byte has enough data for a meaningful graph.
     /// </summary>
-    public bool HasGraphData => _history.Count >= 2;
+    public bool HasGraphData => _historyCount >= 2;
 
     /// <summary>
     /// Updates the byte value and triggers color animation.
@@ -83,22 +91,20 @@ public partial class MonitoredByte : ObservableObject
         if (newValue < _minObserved) _minObserved = newValue;
         if (newValue > _maxObserved) _maxObserved = newValue;
 
-        // Add to history with absolute timestamp
+        // Add to circular buffer
         long now = Environment.TickCount64;
-        _history.Add((now, newValue));
+        AddToHistory(now, newValue);
 
-        // Prune old points (older than 5 seconds)
+        // Prune old points (older than 5 seconds) - O(1) per removal with circular buffer
         long cutoff = now - HistoryDurationMs;
-        while (_history.Count > 0 && _history[0].timestamp < cutoff)
+        while (_historyCount > 0 && _historyBuffer[_historyHead].timestamp < cutoff)
         {
-            _history.RemoveAt(0);
+            _historyHead = (_historyHead + 1) % HistoryCapacity;
+            _historyCount--;
         }
 
-        // Also limit max points for performance
-        while (_history.Count > MaxHistoryPoints)
-        {
-            _history.RemoveAt(0);
-        }
+        // Mark graph as needing update
+        _graphDirty = true;
 
         // Calculate intensity based on change magnitude
         Intensity = CalculateIntensity(newValue);
@@ -108,25 +114,63 @@ public partial class MonitoredByte : ObservableObject
     }
 
     /// <summary>
+    /// Adds a point to the circular history buffer. O(1) operation.
+    /// </summary>
+    private void AddToHistory(long timestamp, byte value)
+    {
+        int tail = (_historyHead + _historyCount) % HistoryCapacity;
+
+        if (_historyCount < HistoryCapacity)
+        {
+            // Buffer not full, just append
+            _historyBuffer[tail] = (timestamp, value);
+            _historyCount++;
+        }
+        else
+        {
+            // Buffer full, overwrite oldest (head moves forward)
+            _historyBuffer[tail] = (timestamp, value);
+            _historyHead = (_historyHead + 1) % HistoryCapacity;
+            // _historyCount stays at HistoryCapacity
+        }
+    }
+
+    /// <summary>
     /// Updates the graph points for rendering. Call periodically from UI timer.
+    /// Only rebuilds if data has changed since last call.
     /// </summary>
     /// <param name="graphWidth">Width of the graph area in pixels.</param>
     /// <param name="graphHeight">Height of the graph area in pixels.</param>
     public void UpdateGraphPoints(double graphWidth, double graphHeight)
     {
-        if (_history.Count < 2 || _minObserved == _maxObserved)
+        // Skip update if nothing changed
+        if (!_graphDirty) return;
+        _graphDirty = false;
+
+        if (_historyCount < 2 || _minObserved == _maxObserved)
         {
-            GraphPoints = new Points();
+            if (_graphPointsInternal.Count > 0)
+            {
+                _graphPointsInternal.Clear();
+                GraphPoints = _graphPointsInternal;
+                OnPropertyChanged(nameof(GraphPoints));
+            }
             return;
         }
 
-        var points = new Points();
+        // Reuse existing collection - clear instead of allocating new
+        _graphPointsInternal.Clear();
+
         long now = Environment.TickCount64;
         long windowStart = now - HistoryDurationMs;
         int range = _maxObserved - _minObserved;
 
-        foreach (var (timestamp, value) in _history)
+        // Iterate circular buffer
+        for (int i = 0; i < _historyCount; i++)
         {
+            int idx = (_historyHead + i) % HistoryCapacity;
+            var (timestamp, value) = _historyBuffer[idx];
+
             // X: map timestamp to 0..graphWidth (oldest on left, newest on right)
             double x = (timestamp - windowStart) / (double)HistoryDurationMs * graphWidth;
 
@@ -137,11 +181,13 @@ public partial class MonitoredByte : ObservableObject
             // Clamp x to visible area
             if (x >= 0 && x <= graphWidth)
             {
-                points.Add(new Point(x, Math.Clamp(y, 0, graphHeight)));
+                _graphPointsInternal.Add(new Point(x, Math.Clamp(y, 0, graphHeight)));
             }
         }
 
-        GraphPoints = points;
+        // Trigger binding update (GraphPoints already references _graphPointsInternal)
+        GraphPoints = _graphPointsInternal;
+        OnPropertyChanged(nameof(GraphPoints));
     }
 
     /// <summary>
@@ -231,13 +277,23 @@ public partial class MonitoredByte : ObservableObject
         _minObserved = 255;
         _maxObserved = 0;
         _sampleCount = 0;
-        _history.Clear();
+
+        // Reset circular buffer (just reset indices, no need to clear array)
+        _historyHead = 0;
+        _historyCount = 0;
+        _graphDirty = false;
+
         Intensity = 0;
         DisplayText = "--";
-        GraphPoints = new Points();
+
+        // Clear and reuse existing Points collection
+        _graphPointsInternal.Clear();
+        GraphPoints = _graphPointsInternal;
+
         Foreground.Color = IdleForeground;
         Background.Color = IdleBackground;
         OnPropertyChanged(nameof(Foreground));
         OnPropertyChanged(nameof(Background));
+        OnPropertyChanged(nameof(GraphPoints));
     }
 }
