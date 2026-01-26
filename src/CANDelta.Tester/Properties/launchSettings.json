@@ -1,0 +1,8 @@
+{
+  "profiles": {
+    "CANDelta.Tester": {
+      "commandName": "Project",
+      "commandLineArgs": "-p COM11 -f \"C:\\\\Users\\\\Mitsos\\\\Desktop\\\\maxxecu_opel2.canhacker.trc\" --loop --stats -s 2"
+    }
+  }
+}
