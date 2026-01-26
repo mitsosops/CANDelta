@@ -52,6 +52,10 @@ public partial class MonitoredByte : ObservableObject
     private readonly Points _graphPointsB = new();
     private bool _usePointsA = true;
 
+    // Track previous colors to avoid unnecessary property notifications
+    private Color _lastFgColor;
+    private Color _lastBgColor;
+
     [ObservableProperty]
     private double _intensity; // 0.0=idle, 1.0=max alert
 
@@ -255,13 +259,20 @@ public partial class MonitoredByte : ObservableObject
         var fgColor = LerpColor(IdleForeground, themeColor, Intensity);
         var bgColor = LerpColor(IdleBackground, Color.FromArgb((byte)(themeColor.A * 0.3), themeColor.R, themeColor.G, themeColor.B), Intensity);
 
-        // Mutate existing brushes to avoid allocations
-        Foreground.Color = fgColor;
-        Background.Color = bgColor;
+        // Only update and notify if colors actually changed
+        if (fgColor != _lastFgColor)
+        {
+            Foreground.Color = fgColor;
+            _lastFgColor = fgColor;
+            OnPropertyChanged(nameof(Foreground));
+        }
 
-        // Force property change notification for UI update
-        OnPropertyChanged(nameof(Foreground));
-        OnPropertyChanged(nameof(Background));
+        if (bgColor != _lastBgColor)
+        {
+            Background.Color = bgColor;
+            _lastBgColor = bgColor;
+            OnPropertyChanged(nameof(Background));
+        }
     }
 
     /// <summary>
@@ -305,6 +316,8 @@ public partial class MonitoredByte : ObservableObject
 
         Foreground.Color = IdleForeground;
         Background.Color = IdleBackground;
+        _lastFgColor = IdleForeground;
+        _lastBgColor = IdleBackground;
         OnPropertyChanged(nameof(Foreground));
         OnPropertyChanged(nameof(Background));
     }

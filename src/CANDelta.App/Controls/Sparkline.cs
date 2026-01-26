@@ -18,6 +18,11 @@ public class Sparkline : Control
     public static readonly StyledProperty<double> StrokeThicknessProperty =
         AvaloniaProperty.Register<Sparkline, double>(nameof(StrokeThickness), 1.0);
 
+    // Cached pen to avoid allocations on every render
+    private Pen? _cachedPen;
+    private IBrush? _cachedStroke;
+    private double _cachedStrokeThickness;
+
     public Points Points
     {
         get => GetValue(PointsProperty);
@@ -49,11 +54,20 @@ public class Sparkline : Control
         if (points == null || points.Count < 2)
             return;
 
-        var pen = new Pen(Stroke, StrokeThickness);
+        var stroke = Stroke;
+        var strokeThickness = StrokeThickness;
+
+        // Only create new pen if stroke or thickness changed
+        if (_cachedPen == null || _cachedStroke != stroke || _cachedStrokeThickness != strokeThickness)
+        {
+            _cachedPen = new Pen(stroke, strokeThickness);
+            _cachedStroke = stroke;
+            _cachedStrokeThickness = strokeThickness;
+        }
 
         for (int i = 1; i < points.Count; i++)
         {
-            context.DrawLine(pen, points[i - 1], points[i]);
+            context.DrawLine(_cachedPen, points[i - 1], points[i]);
         }
     }
 }

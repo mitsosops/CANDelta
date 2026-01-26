@@ -100,7 +100,7 @@ public partial class MainWindowViewModel : ObservableObject
         _traceRecorder = new TraceRecorderService();
 
         InitializeTimers();
-        RefreshPorts();
+        _ = RefreshPortsAsync();
     }
 
     private void InitializeTimers()
@@ -130,18 +130,22 @@ public partial class MainWindowViewModel : ObservableObject
         _graphUpdateTimer.Start();
 
         // Port polling timer: check for new devices every 2 seconds
+        // Run on background thread to avoid UI freezes from slow WMI queries
         _portPollTimer = new DispatcherTimer
         {
             Interval = TimeSpan.FromSeconds(2)
         };
-        _portPollTimer.Tick += (_, _) => RefreshPorts();
+        _portPollTimer.Tick += (_, _) => _ = RefreshPortsAsync();
         _portPollTimer.Start();
     }
 
     [RelayCommand]
-    private void RefreshPorts()
+    private async Task RefreshPortsAsync()
     {
-        var currentPorts = _serialService.GetAvailablePorts();
+        // Run WMI query on background thread to avoid UI freezes
+        var currentPorts = await Task.Run(() => _serialService.GetAvailablePorts());
+
+        // All UI updates happen on UI thread (we're back on UI thread after await)
         var currentPortNames = new HashSet<string>(currentPorts.Select(p => p.PortName));
         var existingPortNames = new HashSet<string>(AvailablePorts.Select(p => p.PortName));
 
@@ -226,7 +230,7 @@ public partial class MainWindowViewModel : ObservableObject
                 AppSettings.DriverPromptDismissed = true; // Don't prompt again after success
                 // Refresh ports to pick up the new driver
                 await Task.Delay(1000); // Give Windows time to re-enumerate
-                RefreshPorts();
+                await RefreshPortsAsync();
             }
             else
             {
